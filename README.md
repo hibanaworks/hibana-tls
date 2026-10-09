@@ -65,7 +65,7 @@ The sibling QUIC repository also contains Lean proofs and Z3 counterexample
 checks for abstract ownership, cancellation and reclamation models. Their
 assumptions and Rust correspondence matter: they are not an automatic proof of
 this complete TLS implementation. For the runtime's precise premises, see
-[Hibana's guarantees](https://github.com/hibanaworks/hibana/blob/2eaba16d204a3f33f25ab00087d504380fe7e27f/README.md#guarantees).
+[Hibana's guarantees](https://github.com/hibanaworks/hibana/blob/af69def928f498ad474a4d2add238615e175a49b/README.md#guarantees).
 
 ## Build
 
