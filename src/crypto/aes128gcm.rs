@@ -24,9 +24,15 @@ fn multiply(x: u128, mut v: u128) -> u128 {
     z
 }
 fn absorb(mut y: u128, h: u128, bytes: &[u8]) -> u128 {
-    for chunk in bytes.chunks(16) {
+    let mut blocks = bytes.chunks_exact(16);
+    for chunk in &mut blocks {
+        let block: &[u8; 16] = chunk.try_into().expect("complete GHASH block");
+        y = multiply(y ^ u128::from_be_bytes(*block), h);
+    }
+    let tail = blocks.remainder();
+    if !tail.is_empty() {
         let mut block = [0u8; 16];
-        block[..chunk.len()].copy_from_slice(chunk);
+        block[..tail.len()].copy_from_slice(tail);
         y = multiply(y ^ u128::from_be_bytes(block), h);
     }
     y
@@ -91,6 +97,21 @@ pub fn open(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn borrowed_full_blocks_and_padded_tails_match_ghash() {
+        let bytes: [u8; 65] = core::array::from_fn(|i| (i * 17 + 3) as u8);
+        let h = 0x66e94bd4ef8a2c3b884cfa59ca342b2eu128;
+        for len in 0..=bytes.len() {
+            let mut expected = 0x123456789abcdef0u128;
+            for chunk in bytes[..len].chunks(16) {
+                let mut padded = [0u8; 16];
+                padded[..chunk.len()].copy_from_slice(chunk);
+                expected = multiply(expected ^ u128::from_be_bytes(padded), h);
+            }
+            assert_eq!(absorb(0x123456789abcdef0, h, &bytes[..len]), expected);
+        }
+    }
+
     #[test]
     fn independent_openssl_aead_and_tampering() {
         for &(seed, a, n, cipher, mac) in include!("../../tests/aes_gcm_vectors.in") {
