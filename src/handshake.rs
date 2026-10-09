@@ -31,7 +31,7 @@ use crate::{
 pub mod global;
 pub mod key_source;
 pub mod local;
-mod operations;
+mod imp;
 
 pub use crate::crypto::p256::SecretKey as SigningKey;
 pub use crate::wire::CipherPolicy;

@@ -1,5 +1,19 @@
 # hibana-tls
 
+## Read the Hibana program first
+
+- [Handshake global](src/handshake/global.rs) defines transcript order.
+- [Handshake locals](src/handshake/local.rs) execute the projected exchanges.
+- [Owned key handoff](src/handshake/key_source.rs) transfers actual key material.
+- [Handshake implementation parts](src/handshake/imp/mod.rs) contain the
+  individual transcript computations selected by those locals.
+
+Each choreographed unit exposes its global and local roles first. Numerical
+implementation parts live under `imp/`; they must not select the next protocol
+phase or duplicate the key owner's authority. Pure arithmetic modules do not
+need artificial global/local files. This layout migration is in progress.
+
+
 A separate, work-in-progress TLS 1.3 crate for hibana-quic, built around Hibana choreography.
 The core is `no_std` with no default allocator. Optional `alloc` only supports
 Host-owned secret byte vectors. Unsafe Rust is denied except the explicit volatile
@@ -74,8 +88,8 @@ results and remaining qualification limits are recorded with each checkpoint.
 
 ## Source layout
 
-- `src/global.rs`: transcript message definitions and raw two-party reference graph.
-- `src/owned_global.rs`: the shared three-party TLS/input/material-handoff graph embedded by QUIC.
+- `src/handshake/global.rs`: transcript message definitions and raw two-party reference graph.
+- `src/handshake/global/owned.rs`: the shared three-party TLS/input/material-handoff graph embedded by QUIC.
 - `src/handshake/`: direct locals, private operations and actual affine key/Finished material.
 - `src/endpoint.rs`: the common QUIC TLS interface, reexported by QUIC.
 - `src/crypto/`: fixed-storage arithmetic, including detached-tag in-place AEAD;

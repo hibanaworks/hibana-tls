@@ -1,14 +1,8 @@
-//! TLS transcript and cryptographic operations, separated from message ordering.
-//!
-//! These functions validate and apply ONE explicitly selected operation. They
-//! never read or write the legacy phase field. The hello boolean reports an
-//! actual negotiation outcome, not the next control state. This extraction is a
-//! migration step: callers must still supply ordering authority; it does not
-//! claim the legacy dispatcher has been removed.
-use super::*;
+//! Single-message transcript and cryptographic operations selected by the locals.
+use super::super::*;
 
 impl BoundedTls<'_, '_> {
-    pub(super) fn client_hello(
+    pub(in crate::handshake) fn client_hello(
         &mut self,
         message: &[u8],
         retry: bool,
@@ -109,7 +103,7 @@ impl BoundedTls<'_, '_> {
             Ok(Some(hello.selected_psk.is_some()))
         }
     }
-    pub(super) fn client_extensions(
+    pub(in crate::handshake) fn client_extensions(
         &mut self,
         message: &[u8],
         resumed: bool,
@@ -139,7 +133,10 @@ impl BoundedTls<'_, '_> {
 
         Ok(())
     }
-    pub(super) fn client_certificate(&mut self, message: &[u8]) -> Result<(), Failure> {
+    pub(in crate::handshake) fn client_certificate(
+        &mut self,
+        message: &[u8],
+    ) -> Result<(), Failure> {
         let count = wire::parse_certificate(message, &mut self.cert_ranges)?;
         if count == 0 || message.len() > self.certificates.len() {
             return Err(Failure::Capacity);
@@ -151,14 +148,17 @@ impl BoundedTls<'_, '_> {
 
         Ok(())
     }
-    pub(super) fn client_certificate_verify(&mut self, message: &[u8]) -> Result<(), Failure> {
+    pub(in crate::handshake) fn client_certificate_verify(
+        &mut self,
+        message: &[u8],
+    ) -> Result<(), Failure> {
         let verify = wire::parse_certificate_verify(message)?;
         self.validate_peer_certificate(Some((verify.scheme, verify.signature)))?;
         self.transcript.append(message)?;
 
         Ok(())
     }
-    pub(super) fn client_finished(&mut self, message: &[u8]) -> Result<(), Failure> {
+    pub(in crate::handshake) fn client_finished(&mut self, message: &[u8]) -> Result<(), Failure> {
         let verify_data = wire::parse_finished(message)?;
         self.schedule
             .verify_finished(Side::Server, &self.transcript, verify_data)?;
@@ -178,7 +178,7 @@ impl BoundedTls<'_, '_> {
 
         Ok(())
     }
-    pub(super) fn server_hello(
+    pub(in crate::handshake) fn server_hello(
         &mut self,
         message: &[u8],
         retry: bool,
@@ -408,7 +408,7 @@ impl BoundedTls<'_, '_> {
         self.install_application()?;
         Ok(Some(resumed))
     }
-    pub(super) fn server_finished(&mut self, message: &[u8]) -> Result<(), Failure> {
+    pub(in crate::handshake) fn server_finished(&mut self, message: &[u8]) -> Result<(), Failure> {
         let verify = wire::parse_finished(message)?;
         self.schedule
             .verify_finished(Side::Client, &self.transcript, verify)?;
