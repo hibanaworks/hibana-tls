@@ -1,0 +1,1 @@
+Public certificate-only fixtures generated with OpenSSL 3 on 2026-10-08. Private ephemeral keys are not distributed. Tests inject Unix time 1800000000. Modes cover DNS permitted/excluded subtrees, pathlen, unknown critical extensions, EKU, direct trust, wildcard DNS and IP SAN. Not a security qualification.

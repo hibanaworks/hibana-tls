@@ -1,0 +1,21 @@
+[package]
+name = "hibana-tls"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+publish = false
+license = "MIT OR Apache-2.0"
+description = "Work-in-progress no_std, allocation-free TLS choreography for Hibana"
+
+[dependencies]
+hibana = { git = "https://github.com/hibanaworks/hibana", rev = "6fccdbf81038b00d99ec1bb2b9c43a487521628e", default-features = false }
+
+
+
+[features]
+default = []
+alloc = []
+
+[dev-dependencies]
+hibana-quic = { path = "../hibana-quic" }
+actor-test-allocator = { path = "../hibana-quic/tests/support/actor-test-allocator" }
