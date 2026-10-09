@@ -29,7 +29,11 @@ Read [global.rs](src/handshake/global.rs), then its
 [owned-key composition](src/handshake/global/owned.rs), then
 [`client_owned` / `server_owned`](src/handshake/local/mod.rs).
 The globals describe Hello, certificate verification, Finished and key-handoff
-order. The localsides execute that order directly through projected endpoints.
+order. Each choreography function returns `impl Projectable`; Rust infers its
+step-list from the `g::send`, `g::seq`, `g::route`, and `g::par` expressions.
+QUIC composes the owned-key TLS global directly into its connection global,
+then projects the combined choreography for each role. The localsides execute
+that order directly through projected endpoints.
 
 A typical handoff publishes actual key material into
 [`Handoff`](src/handshake/local/keys.rs), sends `KeysReady`, receives `KeysTaken`,
@@ -61,7 +65,7 @@ The sibling QUIC repository also contains Lean proofs and Z3 counterexample
 checks for abstract ownership, cancellation and reclamation models. Their
 assumptions and Rust correspondence matter: they are not an automatic proof of
 this complete TLS implementation. For the runtime's precise premises, see
-[Hibana's guarantees](https://github.com/hibanaworks/hibana/blob/6fccdbf81038b00d99ec1bb2b9c43a487521628e/README.md#guarantees).
+[Hibana's guarantees](https://github.com/hibanaworks/hibana/blob/2eaba16d204a3f33f25ab00087d504380fe7e27f/README.md#guarantees).
 
 ## Build
 

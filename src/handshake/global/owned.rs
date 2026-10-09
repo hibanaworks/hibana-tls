@@ -22,6 +22,7 @@ pub use crate::handshake::global::Retry;
 pub use crate::handshake::global::RetryHello;
 pub use crate::handshake::global::ServerStart;
 pub use crate::handshake::global::VERIFY;
+use hibana::runtime::program::Projectable;
 use hibana::{
     g,
     runtime::program::{RoleProgram, project},
@@ -38,59 +39,7 @@ pub type FullKeys = g::Msg<245, ()>;
 pub type CompleteKeys = g::Msg<246, ()>;
 pub type ClientKeys = g::Msg<247, ()>;
 pub type ServerKeys = g::Msg<248, ()>;
-pub type KeyTransfer =
-    g::Seq<g::Send<VERIFY, HANDOFF, KeysReady>, g::Send<HANDOFF, VERIFY, KeysTaken>>;
-pub type Receive<N, D> = g::Seq<
-    g::Send<VERIFY, INPUT, N>,
-    g::Seq<g::Send<INPUT, VERIFY, D>, g::Seq<KeyTransfer, g::Send<VERIFY, INPUT, Applied>>>,
->;
-pub type HelloFlow = g::Seq<
-    Receive<NeedHello, Hello>,
-    g::Route<
-        g::Seq<
-            g::Send<VERIFY, INPUT, Retry>,
-            g::Seq<g::Send<VERIFY, HANDOFF, RetryKeys>, Receive<NeedRetryHello, RetryHello>>,
-        >,
-        g::Seq<g::Send<VERIFY, INPUT, HelloReady>, g::Send<VERIFY, HANDOFF, HelloKeys>>,
-    >,
->;
-pub type CertificateFlow = g::Seq<
-    Receive<NeedCertificate, Certificate>,
-    Receive<NeedCertificateVerify, CertificateVerify>,
->;
-pub type FinishFlow = g::Seq<
-    Receive<NeedFinished, Finished>,
-    g::Seq<g::Send<VERIFY, INPUT, Complete>, g::Send<VERIFY, HANDOFF, CompleteKeys>>,
->;
-pub type ClientFlow = g::Seq<
-    HelloFlow,
-    g::Seq<
-        Receive<NeedExtensions, Extensions>,
-        g::Seq<
-            g::Route<
-                g::Seq<g::Send<VERIFY, INPUT, Resumed>, g::Send<VERIFY, HANDOFF, ResumedKeys>>,
-                g::Seq<
-                    g::Send<VERIFY, INPUT, Full>,
-                    g::Seq<g::Send<VERIFY, HANDOFF, FullKeys>, CertificateFlow>,
-                >,
-            >,
-            FinishFlow,
-        >,
-    >,
->;
-pub type ServerFlow = g::Seq<HelloFlow, FinishFlow>;
-pub type Flow = g::Route<
-    g::Seq<
-        g::Send<VERIFY, INPUT, ClientStart>,
-        g::Seq<g::Send<VERIFY, HANDOFF, ClientKeys>, ClientFlow>,
-    >,
-    g::Seq<
-        g::Send<VERIFY, INPUT, ServerStart>,
-        g::Seq<g::Send<VERIFY, HANDOFF, ServerKeys>, ServerFlow>,
-    >,
->;
-fn receive<N: g::Message<Payload = ()>, D: g::Message<Payload = ()>>() -> g::Program<Receive<N, D>>
-{
+fn receive<N: g::Message<Payload = ()>, D: g::Message<Payload = ()>>() -> impl Projectable {
     g::seq(
         g::send::<VERIFY, INPUT, N>(),
         g::seq(
@@ -105,7 +54,7 @@ fn receive<N: g::Message<Payload = ()>, D: g::Message<Payload = ()>>() -> g::Pro
         ),
     )
 }
-fn hello() -> g::Program<HelloFlow> {
+fn hello() -> impl Projectable {
     g::seq(
         receive::<NeedHello, Hello>(),
         g::route(
@@ -123,7 +72,7 @@ fn hello() -> g::Program<HelloFlow> {
         ),
     )
 }
-fn finish() -> g::Program<FinishFlow> {
+fn finish() -> impl Projectable {
     g::seq(
         receive::<NeedFinished, Finished>(),
         g::seq(
@@ -132,7 +81,7 @@ fn finish() -> g::Program<FinishFlow> {
         ),
     )
 }
-pub fn client() -> g::Program<ClientFlow> {
+pub fn client() -> impl Projectable {
     g::seq(
         hello(),
         g::seq(
@@ -159,10 +108,10 @@ pub fn client() -> g::Program<ClientFlow> {
         ),
     )
 }
-pub fn server() -> g::Program<ServerFlow> {
+pub fn server() -> impl Projectable {
     g::seq(hello(), finish())
 }
-pub fn choreography() -> g::Program<Flow> {
+pub fn choreography() -> impl Projectable {
     g::route(
         g::seq(
             g::send::<VERIFY, INPUT, ClientStart>(),

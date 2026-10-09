@@ -6,6 +6,7 @@
 //! handshakes omit Certificate/CertificateVerify only after negotiated PSK
 //! selection; Finished remains mandatory. The connection embeds this graph as its
 //! live receive/transcript path.
+use hibana::runtime::program::Projectable;
 use hibana::{
     g,
     runtime::program::{RoleProgram, project},
@@ -32,39 +33,7 @@ pub type NeedFinished = g::Msg<195, ()>;
 pub type Finished = g::Msg<196, ()>;
 pub type Complete = g::Msg<197, ()>;
 
-pub type Receive<N, D> = g::Seq<
-    g::Send<VERIFY, INPUT, N>,
-    g::Seq<g::Send<INPUT, VERIFY, D>, g::Send<VERIFY, INPUT, Applied>>,
->;
-pub type HelloFlow = g::Seq<
-    Receive<NeedHello, Hello>,
-    g::Route<
-        g::Seq<g::Send<VERIFY, INPUT, Retry>, Receive<NeedRetryHello, RetryHello>>,
-        g::Send<VERIFY, INPUT, HelloReady>,
-    >,
->;
-pub type CertificateFlow = g::Seq<
-    Receive<NeedCertificate, Certificate>,
-    Receive<NeedCertificateVerify, CertificateVerify>,
->;
-pub type ClientFlow = g::Seq<
-    HelloFlow,
-    g::Seq<
-        Receive<NeedExtensions, Extensions>,
-        g::Seq<
-            g::Route<
-                g::Send<VERIFY, INPUT, Resumed>,
-                g::Seq<g::Send<VERIFY, INPUT, Full>, CertificateFlow>,
-            >,
-            g::Seq<Receive<NeedFinished, Finished>, g::Send<VERIFY, INPUT, Complete>>,
-        >,
-    >,
->;
-pub type ServerFlow =
-    g::Seq<HelloFlow, g::Seq<Receive<NeedFinished, Finished>, g::Send<VERIFY, INPUT, Complete>>>;
-
-fn receive<N: g::Message<Payload = ()>, D: g::Message<Payload = ()>>() -> g::Program<Receive<N, D>>
-{
+fn receive<N: g::Message<Payload = ()>, D: g::Message<Payload = ()>>() -> impl Projectable {
     g::seq(
         g::send::<VERIFY, INPUT, N>(),
         g::seq(
@@ -73,7 +42,7 @@ fn receive<N: g::Message<Payload = ()>, D: g::Message<Payload = ()>>() -> g::Pro
         ),
     )
 }
-fn hello() -> g::Program<HelloFlow> {
+fn hello() -> impl Projectable {
     g::seq(
         receive::<NeedHello, Hello>(),
         g::route(
@@ -85,7 +54,7 @@ fn hello() -> g::Program<HelloFlow> {
         ),
     )
 }
-pub fn client() -> g::Program<ClientFlow> {
+pub fn client() -> impl Projectable {
     g::seq(
         hello(),
         g::seq(
@@ -109,7 +78,7 @@ pub fn client() -> g::Program<ClientFlow> {
         ),
     )
 }
-pub fn server() -> g::Program<ServerFlow> {
+pub fn server() -> impl Projectable {
     g::seq(
         hello(),
         g::seq(
@@ -139,11 +108,7 @@ pub fn server_programs() -> Programs {
 
 pub type ClientStart = g::Msg<198, ()>;
 pub type ServerStart = g::Msg<199, ()>;
-pub type Flow = g::Route<
-    g::Seq<g::Send<VERIFY, INPUT, ClientStart>, ClientFlow>,
-    g::Seq<g::Send<VERIFY, INPUT, ServerStart>, ServerFlow>,
->;
-pub fn choreography() -> g::Program<Flow> {
+pub fn choreography() -> impl Projectable {
     g::route(
         g::seq(g::send::<VERIFY, INPUT, ClientStart>(), client()),
         g::seq(g::send::<VERIFY, INPUT, ServerStart>(), server()),
