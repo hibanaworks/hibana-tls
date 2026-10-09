@@ -29,7 +29,6 @@ use crate::{
 };
 
 pub mod global;
-pub mod key_source;
 pub mod local;
 mod imp;
 
@@ -748,7 +747,7 @@ impl<'cfg, 'buf> BoundedTls<'cfg, 'buf> {
                 Mode::Client(c) => c.protocol,
                 Mode::Server(c) => c.protocol,
             },
-            peer_parameters_digest: key_source::peer_parameters_digest(
+            peer_parameters_digest: local::keys::peer_parameters_digest(
                 &self.parameters[..self.parameters_len],
             ),
             early_status: self.early_status,

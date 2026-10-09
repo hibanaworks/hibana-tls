@@ -1,10 +1,27 @@
 //! TLS transcript order with an explicit affine-material handoff participant.
 //! This graph is for the direct QUIC/TLS composition, not a runtime controller.
-pub use crate::global::{
-    Applied, Certificate, CertificateVerify, ClientStart, Complete, Extensions, Finished, Full,
-    Hello, HelloReady, INPUT, NeedCertificate, NeedCertificateVerify, NeedExtensions, NeedFinished,
-    NeedHello, NeedRetryHello, Resumed, Retry, RetryHello, ServerStart, VERIFY,
-};
+pub use crate::handshake::global::Applied;
+pub use crate::handshake::global::Certificate;
+pub use crate::handshake::global::CertificateVerify;
+pub use crate::handshake::global::ClientStart;
+pub use crate::handshake::global::Complete;
+pub use crate::handshake::global::Extensions;
+pub use crate::handshake::global::Finished;
+pub use crate::handshake::global::Full;
+pub use crate::handshake::global::Hello;
+pub use crate::handshake::global::HelloReady;
+pub use crate::handshake::global::INPUT;
+pub use crate::handshake::global::NeedCertificate;
+pub use crate::handshake::global::NeedCertificateVerify;
+pub use crate::handshake::global::NeedExtensions;
+pub use crate::handshake::global::NeedFinished;
+pub use crate::handshake::global::NeedHello;
+pub use crate::handshake::global::NeedRetryHello;
+pub use crate::handshake::global::Resumed;
+pub use crate::handshake::global::Retry;
+pub use crate::handshake::global::RetryHello;
+pub use crate::handshake::global::ServerStart;
+pub use crate::handshake::global::VERIFY;
 use hibana::{
     g,
     runtime::program::{RoleProgram, project},

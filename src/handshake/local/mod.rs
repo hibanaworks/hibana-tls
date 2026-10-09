@@ -3,6 +3,8 @@
 //! The numerical operations never dispatch on a handwritten TLS phase. The
 //! owner's async continuation and the projected endpoints determine order.
 //! The QUIC connection and its transcript tests embed these roles directly.
+pub mod keys;
+
 use super::{BoundedTls, Failure, Mode, global as p};
 use crate::endpoint::Level;
 use core::{
@@ -363,7 +365,7 @@ pub async fn server_input(
 }
 
 struct OwnedGuard<'a, 'source, 'scope, 'cfg, 'buf, 'slot> {
-    source: &'a RefCell<&'source mut super::key_source::KeySource<'scope, 'cfg, 'buf>>,
+    source: &'a RefCell<&'source mut crate::handshake::local::keys::KeySource<'scope, 'cfg, 'buf>>,
     slot: &'a MessageSlot<'slot>,
 }
 impl Drop for OwnedGuard<'_, '_, '_, '_, '_, '_> {
@@ -375,11 +377,11 @@ impl Drop for OwnedGuard<'_, '_, '_, '_, '_, '_> {
 
 pub async fn client_owned<'scope, const P: usize>(
     endpoint: &mut Endpoint<'_, { p::VERIFY }>,
-    source: &RefCell<&mut super::key_source::KeySource<'scope, '_, '_>>,
+    source: &RefCell<&mut crate::handshake::local::keys::KeySource<'scope, '_, '_>>,
     slot: &MessageSlot<'_>,
-    handoff: &super::key_source::Handoff<'scope, P>,
+    handoff: &crate::handshake::local::keys::Handoff<'scope, P>,
 ) -> Result<(), Error> {
-    use crate::owned_global as p;
+    use crate::handshake::global::owned as p;
     {
         let source = source.borrow();
         if !matches!(source.provider.mode, Mode::Client(_)) || !source.provider.pristine() {
@@ -517,11 +519,11 @@ pub async fn client_owned<'scope, const P: usize>(
 
 pub async fn server_owned<'scope, const P: usize>(
     endpoint: &mut Endpoint<'_, { p::VERIFY }>,
-    source: &RefCell<&mut super::key_source::KeySource<'scope, '_, '_>>,
+    source: &RefCell<&mut crate::handshake::local::keys::KeySource<'scope, '_, '_>>,
     slot: &MessageSlot<'_>,
-    handoff: &super::key_source::Handoff<'scope, P>,
+    handoff: &crate::handshake::local::keys::Handoff<'scope, P>,
 ) -> Result<(), Error> {
-    use crate::owned_global as p;
+    use crate::handshake::global::owned as p;
     {
         let source = source.borrow();
         if !matches!(source.provider.mode, Mode::Server(_)) || !source.provider.pristine() {

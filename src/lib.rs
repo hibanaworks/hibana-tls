@@ -3,7 +3,6 @@
 //! QUIC-specific TLS endpoint and cryptographic material; security qualification is ongoing.
 //! Protocol order belongs to Hibana globals and direct locals, not a phase enum.
 pub mod crypto;
-pub use handshake::global;
 
 pub mod x509;
 
@@ -31,4 +30,3 @@ pub mod key_exchange;
 pub mod endpoint;
 
 pub mod handshake;
-pub use handshake::global::owned as owned_global;

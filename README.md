@@ -14,7 +14,7 @@ cryptographic security proof.
 
 - [handshake/global.rs](src/handshake/global.rs): legal transcript order.
 - [handshake/local/](src/handshake/local/mod.rs): the actual projected TLS roles.
-- [handshake/key_source.rs](src/handshake/key_source.rs): owned keys and
+- [handshake/local/keys.rs](src/handshake/local/keys.rs): owned keys and
   authenticated Finished receipts passed to QUIC.
 - [handshake/imp/](src/handshake/imp/mod.rs): transcript and cryptographic operations
   used by those roles.

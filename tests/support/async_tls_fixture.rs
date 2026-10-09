@@ -312,14 +312,14 @@ pub fn drain_authenticated_tickets(
 /// Actual projected transcript processing through pristine KeySource ownership.
 /// This component fixture transports CRYPTO plaintext, not QUIC packets.
 pub fn handshake_key_sources_observe<'client, 'server>(
-    client: &mut crate::handshake::key_source::KeySource<'client, '_, '_>,
-    server: &mut crate::handshake::key_source::KeySource<'server, '_, '_>,
+    client: &mut crate::handshake::local::keys::KeySource<'client, '_, '_>,
+    server: &mut crate::handshake::local::keys::KeySource<'server, '_, '_>,
     mut observe: impl FnMut(
-        &mut crate::handshake::key_source::KeySource<'_, '_, '_>,
-        &mut crate::handshake::key_source::KeySource<'_, '_, '_>,
+        &mut crate::handshake::local::keys::KeySource<'_, '_, '_>,
+        &mut crate::handshake::local::keys::KeySource<'_, '_, '_>,
     ),
 ) -> (Collected<'client>, Collected<'server>) {
-    use crate::handshake::key_source::KeySource;
+    use crate::handshake::local::keys::KeySource;
     struct SourceInput<'a, 'scope, 'cfg, 'buf> {
         remote: &'a RefCell<&'a mut KeySource<'scope, 'cfg, 'buf>>,
         bytes: [u8; 8208],
@@ -404,16 +404,16 @@ pub fn handshake_key_sources_observe<'client, 'server>(
         .init()
         .rendezvous(&mut sm, sc.bind(sid).unwrap())
         .unwrap();
-    let cp = crate::owned_global::programs();
-    let sp = crate::owned_global::programs();
+    let cp = crate::handshake::global::owned::programs();
+    let sp = crate::handshake::global::owned::programs();
     let mut cv = cr.enter(cid, &cp.verify).unwrap();
     let mut cw = cr.enter(cid, &cp.input).unwrap();
     let mut sv = sr.enter(sid, &sp.verify).unwrap();
     let mut sw = sr.enter(sid, &sp.input).unwrap();
     let mut ch = cr.enter(cid, &cp.handoff).unwrap();
     let mut sh = sr.enter(sid, &sp.handoff).unwrap();
-    let cmaterial = crate::handshake::key_source::Handoff::<1024>::new();
-    let smaterial = crate::handshake::key_source::Handoff::<1024>::new();
+    let cmaterial = crate::handshake::local::keys::Handoff::<1024>::new();
+    let smaterial = crate::handshake::local::keys::Handoff::<1024>::new();
     let mut cout = Collected::new();
     let mut sout = Collected::new();
     {
@@ -463,9 +463,9 @@ pub fn handshake_key_sources_observe<'client, 'server>(
 /// Actual affine material retained by the test's projected receiving local.
 /// No keys or Finished receipt are reconstructed from the source after handoff.
 pub struct Collected<'scope> {
-    pub handshake: Option<crate::handshake::key_source::HandshakeKeyMaterial<'scope>>,
-    pub application: Option<crate::handshake::key_source::ApplicationKeyMaterial<'scope>>,
-    pub finished: Option<crate::handshake::key_source::Finished<'scope, 1024>>,
+    pub handshake: Option<crate::handshake::local::keys::HandshakeKeyMaterial<'scope>>,
+    pub application: Option<crate::handshake::local::keys::ApplicationKeyMaterial<'scope>>,
+    pub finished: Option<crate::handshake::local::keys::Finished<'scope, 1024>>,
 }
 impl Collected<'_> {
     fn new() -> Self {
@@ -477,14 +477,14 @@ impl Collected<'_> {
     }
 }
 async fn collect<'scope>(
-    endpoint: &mut hibana::Endpoint<'_, { crate::owned_global::HANDOFF }>,
-    material: &crate::handshake::key_source::Handoff<'scope, 1024>,
+    endpoint: &mut hibana::Endpoint<'_, { crate::handshake::global::owned::HANDOFF }>,
+    material: &crate::handshake::local::keys::Handoff<'scope, 1024>,
     out: &mut Collected<'scope>,
 ) -> Result<(), local::Error> {
-    use crate::owned_global as h;
+    use crate::handshake::global::owned as h;
     async fn take<'scope>(
-        endpoint: &mut hibana::Endpoint<'_, { crate::owned_global::HANDOFF }>,
-        material: &crate::handshake::key_source::Handoff<'scope, 1024>,
+        endpoint: &mut hibana::Endpoint<'_, { crate::handshake::global::owned::HANDOFF }>,
+        material: &crate::handshake::local::keys::Handoff<'scope, 1024>,
         out: &mut Collected<'scope>,
     ) -> Result<(), local::Error> {
         endpoint.recv::<h::KeysReady>().await?;
