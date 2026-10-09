@@ -11,7 +11,7 @@ pub mod entropy;
 mod protocol;
 pub mod schedule;
 pub mod wire;
-pub use protocol::Protocol;
+pub use protocol::{Protocol, RawProtocol};
 pub mod signature;
 
 pub mod quic;

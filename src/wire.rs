@@ -308,7 +308,7 @@ fn parse_alpn(
         if name.is_empty() {
             return Err(Error::Malformed);
         }
-        if expected.map_or(name == ALPN || name == b"h3", |p| name == p.alpn()) {
+        if expected.is_none_or(|p| name == p.alpn()) {
             if found == Some(name) {
                 return Err(Error::Malformed);
             }
@@ -394,32 +394,14 @@ fn parse_client_shares(data: &[u8]) -> Result<(&[u8], &[u8]), Error> {
 /// parser: cookies require validate_client_hello_retry and retained CH1 state.
 /// PSK/early-data/post-handshake-auth requests are not negotiated.
 pub fn parse_client_hello(message: &[u8]) -> Result<ClientHello<'_>, Error> {
-    parse_client_hello_context(
-        message,
-        false,
-        false,
-        false,
-        Some(crate::Protocol::Http09),
-    )
+    parse_client_hello_context(message, false, false, false, Some(crate::Protocol::Http09))
 }
 /// Bounded PSK_DHE offer parser. It does not authenticate the binder or ticket.
 pub fn parse_client_hello_psk(message: &[u8]) -> Result<ClientHello<'_>, Error> {
-    parse_client_hello_context(
-        message,
-        false,
-        true,
-        false,
-        Some(crate::Protocol::Http09),
-    )
+    parse_client_hello_context(message, false, true, false, Some(crate::Protocol::Http09))
 }
 pub fn parse_client_hello_early(message: &[u8]) -> Result<ClientHello<'_>, Error> {
-    parse_client_hello_context(
-        message,
-        false,
-        true,
-        true,
-        Some(crate::Protocol::Http09),
-    )
+    parse_client_hello_context(message, false, true, true, Some(crate::Protocol::Http09))
 }
 /// Parse the offered ALPN against the endpoint's immutable application protocol.
 pub fn parse_client_hello_early_for_protocol(
@@ -1421,7 +1403,7 @@ fn encode_client_hello_inner(
     if !valid_name(server_name) {
         return Err(Error::Malformed);
     }
-    if alpn != ALPN && alpn != b"h3" {
+    if alpn.is_empty() || alpn.len() > 255 {
         return Err(Error::Unsupported);
     }
     encode(out, 1, |w| {
@@ -1743,7 +1725,7 @@ pub fn encode_encrypted_extensions_early(
     params: &[u8],
     early: bool,
 ) -> Result<usize, Error> {
-    if alpn != ALPN && alpn != b"h3" {
+    if alpn.is_empty() || alpn.len() > 255 {
         return Err(Error::Unsupported);
     }
     encode(out, 8, |w| {
@@ -2463,10 +2445,19 @@ mod tests {
             encode_server_hello(&mut out, &[1; 32], &key, 0x1302),
             Err(Error::Unsupported)
         );
-        assert_eq!(
-            encode_client_hello(&mut out, &[1; 32], &key, "localhost", b"h2", &[]),
-            Err(Error::Unsupported)
-        );
+        // Encoding a valid ALPN does not authorize selecting it for another protocol.
+        let n = encode_client_hello(&mut out, &[1; 32], &key, "localhost", b"h2", &[]).unwrap();
+        assert!(parse_client_hello(&out[..n]).is_err());
+        for alpn in [&b""[..], &[b'x'; 256]] {
+            assert_eq!(
+                encode_client_hello(&mut out, &[1; 32], &key, "localhost", alpn, &[]),
+                Err(Error::Unsupported)
+            );
+            assert_eq!(
+                encode_encrypted_extensions(&mut out, alpn, &[]),
+                Err(Error::Unsupported)
+            );
+        }
         for name in ["", "-bad.test", "bad..test", "name\0.test", "bad.test."] {
             assert!(encode_client_hello(&mut out, &[1; 32], &key, name, ALPN, &[]).is_err());
         }
@@ -3519,6 +3510,59 @@ mod early_tests {
         assert!(
             parse_encrypted_extensions_early_for_protocol(&first[..n], Protocol::Http09).is_err()
         );
+    }
+    #[test]
+    fn raw_alpn_is_exact_in_both_tls_directions() {
+        use crate::{Protocol, RawProtocol};
+        let selected = Protocol::Raw(RawProtocol::new(b"hello-quic/1").unwrap());
+        let other = Protocol::Raw(RawProtocol::new(b"other-quic/1").unwrap());
+        let mut bytes = [0; 2048];
+        let n = encode_client_hello(
+            &mut bytes,
+            &[1; 32],
+            &share(),
+            "localhost",
+            selected.alpn(),
+            &[],
+        )
+        .unwrap();
+        assert_eq!(
+            parse_client_hello_early_for_protocol(&bytes[..n], selected)
+                .unwrap()
+                .alpn,
+            selected.alpn()
+        );
+        for wrong in [other, Protocol::Http09, Protocol::Http3] {
+            assert!(parse_client_hello_early_for_protocol(&bytes[..n], wrong).is_err());
+        }
+        let retry = HelloRetryRequest {
+            suite: 0x1301,
+            selected_group: None,
+            cookie: Some(b"cookie"),
+        };
+        let mut second = [0; 2048];
+        let m = encode_client_hello_retry(&mut second, &bytes[..n], &share(), &retry).unwrap();
+        assert_eq!(
+            validate_client_hello_retry_early_for_protocol(
+                &bytes[..n],
+                &second[..m],
+                &retry,
+                selected
+            )
+            .unwrap()
+            .alpn,
+            selected.alpn()
+        );
+        let n = encode_encrypted_extensions(&mut bytes, selected.alpn(), &[]).unwrap();
+        assert_eq!(
+            parse_encrypted_extensions_early_for_protocol(&bytes[..n], selected)
+                .unwrap()
+                .alpn,
+            selected.alpn()
+        );
+        for wrong in [other, Protocol::Http09, Protocol::Http3] {
+            assert!(parse_encrypted_extensions_early_for_protocol(&bytes[..n], wrong).is_err());
+        }
     }
     #[test]
     fn alpn_offer_selects_configured_protocol_not_first_known_name() {
