@@ -199,6 +199,11 @@ fn check_key_usage(certificate: &[u8], required: RequiredUsage) -> Result<(), Er
     Ok(())
 }
 
+
+/// Owned RFC 7468 credential decoding; no filesystem access.
+#[cfg(feature = "alloc")]
+pub mod pem;
+
 #[cfg(test)]
 mod tests {
     use super::*;
