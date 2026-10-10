@@ -1,10 +1,9 @@
-# Owned memory boundary (under integration qualification)
+# Secret-memory boundary
 
-The owner explicitly authorized a minimal unsafe boundary for removing subtle
-and zeroize. Unsafe is denied by default and permitted only in secret/memory.rs.
-QUIC's own unsafe prohibition is unchanged. No code from either dependency is
-copied. The default TLS/QUIC normal/build graph contains only the project crates
-and pinned Hibana; Host networking and independent test dependencies remain.
+The crate denies unsafe code except in secret/memory.rs. That module implements
+volatile comparison barriers and erasure for exclusively owned secret storage.
+The default TLS build is no_std without an allocator; the optional alloc feature
+also erases the initialized and spare capacity of owned secret vectors.
 
 Production unsafe sites:
 1. read_volatile of the initialized stack u8 passed to opaque; its reference is

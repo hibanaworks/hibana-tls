@@ -31,7 +31,7 @@ pub fn check(value: &[u8], descendant: &Certificate<'_>) -> Result<(), InvalidDe
     }
     let ext = policy::read(descendant)?;
     if let Some(san) = ext.san {
-        super::name::matches_san(san,super::name::Identity::Dns("invalid"))?;
+        super::name::matches_san(san, super::name::Identity::Dns("invalid"))?;
         let mut names = der::exact(san, 0x30)?;
         while !names.is_empty() {
             let tag = names[0];
@@ -148,11 +148,14 @@ mod tests {
     }
     #[test]
     fn invalid_presented_dns_never_bypasses_name_constraints() {
-        let mut certificate=super::super::parsed::parse(include_bytes!("../../tests/vectors/x509-owned/direct-valid.der")).unwrap();
+        let mut certificate = super::super::parsed::parse(include_bytes!(
+            "../../tests/vectors/x509-owned/direct-valid.der"
+        ))
+        .unwrap();
         // This is a syntax-only policy unit test, not a forged trust receipt.
-        certificate.extensions=b"\x30\x14\x06\x03\x55\x1d\x11\x04\x0d\x30\x0b\x82\x09a..domain";
-        let permitted=b"\x30\x0e\xa0\x0c\x30\x0a\x82\x08a.domain";
-        assert!(check(permitted,&certificate).is_err());
+        certificate.extensions = b"\x30\x14\x06\x03\x55\x1d\x11\x04\x0d\x30\x0b\x82\x09a..domain";
+        let permitted = b"\x30\x0e\xa0\x0c\x30\x0a\x82\x08a.domain";
+        assert!(check(permitted, &certificate).is_err());
     }
     #[test]
     fn ip_subtree_masks() {

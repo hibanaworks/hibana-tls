@@ -34,12 +34,12 @@ fn xor(key: &[u8; 32], nonce: &[u8; 12], data: &mut [u8]) {
 }
 fn tag(key: &[u8; 32], nonce: &[u8; 12], aad: &[u8], data: &[u8], lens: (u64, u64)) -> [u8; 16] {
     let block = chacha20::block(key, 0, nonce);
-    let one_time: [u8; 32] = block[..32].try_into().expect("fixed key prefix");
+    let one_time: &[u8; 32] = (&block[..32]).try_into().expect("fixed key prefix");
     let zeros = [0; 16];
     let a = lens.0.to_le_bytes();
     let d = lens.1.to_le_bytes();
     poly1305::authenticate_parts(
-        &one_time,
+        one_time,
         &[
             aad,
             &zeros[..(16 - aad.len() % 16) % 16],

@@ -1,5 +1,4 @@
-//! New regression tests for the reconstructed direct RX boundary.
-//! Reimplementation only: these tests have not been compiled or executed.
+//! Packet-key receipt binding and integrity-budget tests.
 use super::*;
 use actor_test_allocator::NoAlloc;
 

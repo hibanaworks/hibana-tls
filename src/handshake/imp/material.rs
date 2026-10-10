@@ -1,181 +1,20 @@
-//! Allocation-free TLS 1.3 certificate and optional PSK_DHE profile for QUIC v1.
-//!
-//! Fresh X25519/P-256 ECDHE, server certificate/hostname/CertificateVerify checks,
-//! Finished verification, and negotiated traffic keys. Caller-owned input/output,
-//! certificate, transport-parameter and optional ticket/cache storage is mandatory.
-//! Resumption offers are bound to the actual client trust/verification context;
-//! only authenticated OneRtt NST input can populate the provider's ticket cache.
-//! Full and resumed handshakes share strict HRR and Finished state transitions.
-//! Explicit early constructors additionally require replay/freshness policy,
-//! remembered limits and application retry authorization. Ordinary constructors
-//! keep 0-RTT disabled. Client authentication is not enabled; this is not a claim
-//! of complete mandatory TLS algorithms or QUIC release conformance.
-
+//! Owned TLS buffers, transcript material and cryptographic operations.
 use crate::crypto::p256::SecretKey;
 use crate::entropy::Entropy;
 use crate::secret::{Erase, Secret};
 use crate::{
-    certificate::{
-        self as certificate, CertificateDer, Limits, ServerName, ServerVerifier, TrustAnchor,
-        UnixTime,
-    },
-    early::{
-        self as early, EarlyFreshness, EarlyStatus, RememberedLimits, ReplayClaim, ServerPolicy,
-    },
-    endpoint::{self as tls, Level, Output, Provider},
+    certificate::{self as certificate, CertificateDer, ServerName, ServerVerifier},
+    early::{self as early, EarlyStatus, RememberedLimits, ReplayClaim},
     quic::packet_protection::{self as crypto, CipherSuite, IntegrityBudget, KeyKind, PacketKey},
+    quic::{self as tls, Level, Output, Provider},
     schedule::{self as schedule, KeySchedule, Side, Transcript},
     ticket, wire,
 };
 
-pub mod global;
-pub mod key_source;
-pub mod local;
-mod operations;
-
-pub use crate::crypto::p256::SecretKey as SigningKey;
-pub use crate::wire::CipherPolicy;
-pub const ALPN: &[u8] = b"hq-interop";
-const MAX_CHAIN: usize = certificate::MAX_INTERMEDIATES + 1;
-
-/// The four buffers must be distinct borrows. RX holds one complete handshake
-/// message; TX holds one complete outbound flight; certificate storage holds the
-/// peer's encoded Certificate message (and CH1 during retry); parameters hold
-/// the peer's raw extension. Server certificate scratch must also fit CH1 for HRR.
-pub struct Storage<'a> {
-    pub rx_message: &'a mut [u8],
-    pub tx_flight: &'a mut [u8],
-    pub peer_certificates: &'a mut [u8],
-    pub peer_parameters: &'a mut [u8],
-}
-
-pub struct ClientConfig<'a> {
-    pub protocol: crate::Protocol,
-    pub version: crate::quic::version::Version,
-    pub server_name: &'a str,
-    pub trust_anchors: &'a [TrustAnchor<'a>],
-    pub now: UnixTime,
-    pub certificate_limits: Limits,
-    pub transport_parameters: &'a [u8],
-}
-pub struct ServerConfig<'a> {
-    pub protocol: crate::Protocol,
-    pub version: crate::quic::version::Version,
-    /// DER leaf first, then intermediate certificates. Do not include private keys.
-    pub certificate_chain: &'a [&'a [u8]],
-    pub signing_key: &'a SigningKey,
-    pub transport_parameters: &'a [u8],
-}
-
-enum Mode<'a> {
-    Client(ClientConfig<'a>),
-    Server(ServerConfig<'a>),
-}
-
-#[derive(Debug)]
-pub enum Failure {
-    InvalidStorage,
-    InvalidConfig,
-    Entropy,
-    State,
-    InvalidKeyShare,
-    UnsupportedSuite,
-    CertificateKeyMismatch,
-    Wire(wire::Error),
-    Certificate(certificate::Error),
-    Schedule(schedule::Error),
-    Crypto(crypto::Error),
-    Ticket(ticket::Error),
-    Parameters(crate::quic::parameters::Error),
-    Early(early::Error),
-    Capacity,
-}
-impl From<wire::Error> for Failure {
-    fn from(e: wire::Error) -> Self {
-        Self::Wire(e)
-    }
-}
-impl From<certificate::Error> for Failure {
-    fn from(e: certificate::Error) -> Self {
-        Self::Certificate(e)
-    }
-}
-impl From<schedule::Error> for Failure {
-    fn from(e: schedule::Error) -> Self {
-        Self::Schedule(e)
-    }
-}
-impl From<crypto::Error> for Failure {
-    fn from(e: crypto::Error) -> Self {
-        Self::Crypto(e)
-    }
-}
-
-impl From<ticket::Error> for Failure {
-    fn from(e: ticket::Error) -> Self {
-        Self::Ticket(e)
-    }
-}
-
-/// Caller-owned cache and trusted millisecond clock, kept across connections.
-pub struct ClientResumption<'a> {
-    pub store: &'a mut dyn ticket::ClientTicketStore,
-    pub clock: &'a dyn ticket::TicketClock,
-}
-/// Caller-owned authenticated ticket key/replay policy and entropy. The policy
-/// bytes must describe stable server configuration not represented by QUIC limits.
-pub struct ServerResumption<'a> {
-    pub store: &'a mut dyn ticket::ServerTicketStore,
-    pub entropy: &'a mut dyn crate::entropy::Entropy,
-    pub clock: &'a dyn ticket::TicketClock,
-    pub policy: &'a [u8],
-    pub lifetime_seconds: u32,
-    pub max_age_skew_ms: u32,
-}
-/// Explicit application opt-in. The application promises replay-tolerant
-/// requests; this does not imply network exactly-once semantics. This opt-in
-/// also authorizes retransmitting those queued complete requests over 1-RTT
-/// after early rejection, under the newly authenticated transport limits.
-/// Applications that do not authorize that retry must not enable this mode.
-#[derive(Clone, Copy)]
-pub struct ClientEarlyData {
-    generation: u64,
-}
-impl ClientEarlyData {
-    pub const fn replay_safe_requests(generation: u64) -> Self {
-        Self { generation }
-    }
-}
-/// Checked configured receive geometry, not authority to release early data.
-/// The QUIC quarantine must independently validate its actual owned buffers
-/// against this policy before admitting data; this value owns no buffer.
-#[derive(Clone, Copy)]
-pub struct ServerEarlyData {
-    generation: u64,
-    limits: RememberedLimits,
-    freshness: EarlyFreshness,
-}
-impl ServerEarlyData {
-    pub fn buffered<const BYTES: usize>(
-        generation: u64,
-        policy: ServerPolicy,
-        parameters: &[u8],
-        slots: usize,
-        freshness: EarlyFreshness,
-    ) -> Result<Self, Failure> {
-        let limits = RememberedLimits::from_authenticated_server_parameters(parameters)
-            .map_err(Failure::Early)?;
-        policy
-            .check_capacity::<BYTES>(limits, slots)
-            .map_err(Failure::Early)?;
-        Ok(Self {
-            generation,
-            limits,
-            freshness,
-        })
-    }
-}
-
+use super::config::*;
+use super::keys;
+mod provider;
+mod transcript;
 enum Resumption<'a> {
     Client(ClientResumption<'a>),
     Server(ServerResumption<'a>),
@@ -226,70 +65,70 @@ fn transport_profile(bytes: &[u8], policy: &[u8]) -> Result<[u8; 32], Failure> {
     Ok(h.finish())
 }
 
-struct DirectionalKeys {
-    local: PacketKey,
-    remote: PacketKey,
+pub(in crate::handshake) struct DirectionalKeys {
+    pub(in crate::handshake) local: PacketKey,
+    pub(in crate::handshake) remote: PacketKey,
 }
 
 // Actual successful Finished verification, owned until the scoped handoff.
-struct VerifiedHandshake {
-    resumed: bool,
-    side: Side,
-    protocol: crate::Protocol,
-    peer_parameters_digest: [u8; 32],
-    early_status: EarlyStatus,
-    early_generation: Option<u64>,
+pub(in crate::handshake) struct VerifiedHandshake {
+    pub(in crate::handshake) resumed: bool,
+    pub(in crate::handshake) side: Side,
+    pub(in crate::handshake) protocol: crate::Protocol,
+    pub(in crate::handshake) peer_parameters_digest: [u8; 32],
+    pub(in crate::handshake) early_status: EarlyStatus,
+    pub(in crate::handshake) early_generation: Option<u64>,
 }
 
 /// A single-owner TLS provider. No self-references into owned receive storage;
 /// peer certificates are represented by bounded offsets and reborrowed for CV.
 pub struct BoundedTls<'cfg, 'buf> {
-    mode: Mode<'cfg>,
-    last_failure: Option<Failure>,
-    rx: Option<&'buf mut [u8]>,
-    rx_used: usize,
-    rx_target: usize,
-    tx: &'buf mut [u8],
-    tx_len: usize,
-    tx_sent: usize,
-    tx_initial_end: usize,
-    tx_handshake_end: usize,
-    certificates: &'buf mut [u8],
-    cert_ranges: [wire::DerRange; MAX_CHAIN],
-    cert_count: usize,
-    first_hello_len: usize,
-    retry_suite: Option<u16>,
-    retry_group: Option<u16>,
-    parameters: &'buf mut [u8],
-    parameters_len: usize,
-    ephemeral: Option<SecretKey>,
-    x25519: Option<crate::key_exchange::X25519Secret>,
-    x25519_share: [u8; 32],
-    allow_x25519: bool,
-    negotiated_group: Option<u16>,
-    share: [u8; 65],
-    random: [u8; 32],
-    transcript: Transcript,
-    schedule: KeySchedule,
-    suite: Option<CipherSuite>,
-    cipher_policy: CipherPolicy,
-    handshake: Option<DirectionalKeys>,
-    application: Option<DirectionalKeys>,
-    integrity: Option<IntegrityBudget>,
+    pub(in crate::handshake) mode: Mode<'cfg>,
+    pub(in crate::handshake) last_failure: Option<Failure>,
+    pub(in crate::handshake) rx: Option<&'buf mut [u8]>,
+    pub(in crate::handshake) rx_used: usize,
+    pub(in crate::handshake) rx_target: usize,
+    pub(in crate::handshake) tx: &'buf mut [u8],
+    pub(in crate::handshake) tx_len: usize,
+    pub(in crate::handshake) tx_sent: usize,
+    pub(in crate::handshake) tx_initial_end: usize,
+    pub(in crate::handshake) tx_handshake_end: usize,
+    pub(in crate::handshake) certificates: &'buf mut [u8],
+    pub(in crate::handshake) cert_ranges: [wire::DerRange; MAX_CHAIN],
+    pub(in crate::handshake) cert_count: usize,
+    pub(in crate::handshake) first_hello_len: usize,
+    pub(in crate::handshake) retry_suite: Option<u16>,
+    pub(in crate::handshake) retry_group: Option<u16>,
+    pub(in crate::handshake) parameters: &'buf mut [u8],
+    pub(in crate::handshake) parameters_len: usize,
+    pub(in crate::handshake) ephemeral: Option<SecretKey>,
+    pub(in crate::handshake) x25519: Option<crate::key_exchange::X25519Secret>,
+    pub(in crate::handshake) x25519_share: [u8; 32],
+    pub(in crate::handshake) allow_x25519: bool,
+    pub(in crate::handshake) negotiated_group: Option<u16>,
+    pub(in crate::handshake) share: [u8; 65],
+    pub(in crate::handshake) random: [u8; 32],
+    pub(in crate::handshake) transcript: Transcript,
+    pub(in crate::handshake) schedule: KeySchedule,
+    pub(in crate::handshake) suite: Option<CipherSuite>,
+    pub(in crate::handshake) cipher_policy: CipherPolicy,
+    pub(in crate::handshake) handshake: Option<DirectionalKeys>,
+    pub(in crate::handshake) application: Option<DirectionalKeys>,
+    pub(in crate::handshake) integrity: Option<IntegrityBudget>,
     resumption: Option<Resumption<'cfg>>,
-    resumption_master: Option<schedule::ResumptionMaster>,
-    verification_context: Option<ticket::VerificationContext>,
-    ticket_binding: Option<ticket::Binding>,
-    offer_age: Option<ticket::OfferAge>,
-    offer_suite: Option<u16>,
-    peer_wants_tickets: bool,
-    early_status: EarlyStatus,
-    early_generation: Option<u64>,
-    early_limits: Option<RememberedLimits>,
-    early_server: Option<ServerEarlyData>,
-    early_key: Option<PacketKey>,
-    early_claim: Option<ReplayClaim>,
-    verified_handshake: Option<VerifiedHandshake>,
+    pub(in crate::handshake) resumption_master: Option<schedule::ResumptionMaster>,
+    pub(in crate::handshake) verification_context: Option<ticket::VerificationContext>,
+    pub(in crate::handshake) ticket_binding: Option<ticket::Binding>,
+    pub(in crate::handshake) offer_age: Option<ticket::OfferAge>,
+    pub(in crate::handshake) offer_suite: Option<u16>,
+    pub(in crate::handshake) peer_wants_tickets: bool,
+    pub(in crate::handshake) early_status: EarlyStatus,
+    pub(in crate::handshake) early_generation: Option<u64>,
+    pub(in crate::handshake) early_limits: Option<RememberedLimits>,
+    pub(in crate::handshake) early_server: Option<ServerEarlyData>,
+    pub(in crate::handshake) early_key: Option<PacketKey>,
+    pub(in crate::handshake) early_claim: Option<ReplayClaim>,
+    pub(in crate::handshake) verified_handshake: Option<VerifiedHandshake>,
 }
 
 impl<'cfg, 'buf> BoundedTls<'cfg, 'buf> {
@@ -740,7 +579,7 @@ impl<'cfg, 'buf> BoundedTls<'cfg, 'buf> {
         })
     }
 
-    fn record_verified_finished(&mut self, resumed: bool) {
+    pub(in crate::handshake) fn record_verified_finished(&mut self, resumed: bool) {
         self.verified_handshake = Some(VerifiedHandshake {
             resumed,
             side: self.side(),
@@ -748,7 +587,7 @@ impl<'cfg, 'buf> BoundedTls<'cfg, 'buf> {
                 Mode::Client(c) => c.protocol,
                 Mode::Server(c) => c.protocol,
             },
-            peer_parameters_digest: key_source::peer_parameters_digest(
+            peer_parameters_digest: keys::peer_parameters_digest(
                 &self.parameters[..self.parameters_len],
             ),
             early_status: self.early_status,
@@ -783,14 +622,14 @@ impl<'cfg, 'buf> BoundedTls<'cfg, 'buf> {
     pub fn negotiated_suite(&self) -> Option<CipherSuite> {
         self.suite
     }
-    fn side(&self) -> Side {
+    pub(in crate::handshake) fn side(&self) -> Side {
         match self.mode {
             Mode::Client(_) => Side::Client,
             Mode::Server(_) => Side::Server,
         }
     }
 
-    fn fail(&mut self, failure: Failure) -> tls::Error {
+    pub(in crate::handshake) fn fail(&mut self, failure: Failure) -> tls::Error {
         let error = match &failure {
             Failure::Capacity | Failure::InvalidStorage => tls::Error::Capacity,
             Failure::Certificate(_)
@@ -875,7 +714,12 @@ impl<'cfg, 'buf> BoundedTls<'cfg, 'buf> {
         Ok(())
     }
 
-    fn install_handshake(&mut self, group: u16, share: &[u8], suite: u16) -> Result<(), Failure> {
+    pub(in crate::handshake) fn install_handshake(
+        &mut self,
+        group: u16,
+        share: &[u8],
+        suite: u16,
+    ) -> Result<(), Failure> {
         let suite = match suite {
             0x1301 => CipherSuite::Aes128GcmSha256,
             0x1303 => CipherSuite::ChaCha20Poly1305Sha256,
@@ -905,7 +749,10 @@ impl<'cfg, 'buf> BoundedTls<'cfg, 'buf> {
         self.handshake = Some(self.packet_keys(KeyKind::Handshake)?);
         Ok(())
     }
-    fn packet_keys(&mut self, kind: KeyKind) -> Result<DirectionalKeys, Failure> {
+    pub(in crate::handshake) fn packet_keys(
+        &mut self,
+        kind: KeyKind,
+    ) -> Result<DirectionalKeys, Failure> {
         let suite = self.suite.ok_or(Failure::State)?;
         let (client, server) = match kind {
             KeyKind::Handshake => self.schedule.take_handshake_traffic()?,
@@ -931,7 +778,7 @@ impl<'cfg, 'buf> BoundedTls<'cfg, 'buf> {
             )?,
         })
     }
-    fn install_application(&mut self) -> Result<(), Failure> {
+    pub(in crate::handshake) fn install_application(&mut self) -> Result<(), Failure> {
         self.schedule.derive_master(&self.transcript)?;
         let keys = self.packet_keys(KeyKind::OneRtt)?;
         self.application = Some(keys);
@@ -1110,7 +957,7 @@ fn map_crypto(error: crypto::Error) -> tls::Error {
     }
 }
 impl BoundedTls<'_, '_> {
-    fn receive_authenticated_ticket_bytes(
+    pub(in crate::handshake) fn receive_authenticated_ticket_bytes(
         &mut self,
         level: Level,
         mut bytes: &[u8],
@@ -1160,359 +1007,3 @@ impl BoundedTls<'_, '_> {
         Ok(())
     }
 }
-
-impl Provider for BoundedTls<'_, '_> {
-    fn observations(&self) -> tls::Observations {
-        tls::Observations {
-            resumed: self
-                .verified_handshake
-                .as_ref()
-                .map(|receipt| receipt.resumed),
-            negotiated_suite: self.negotiated_suite().map(|suite| match suite {
-                CipherSuite::Aes128GcmSha256 => 0x1301,
-                CipherSuite::ChaCha20Poly1305Sha256 => 0x1303,
-            }),
-            failed_authentications: self.integrity.as_ref().map(IntegrityBudget::failed_packets),
-        }
-    }
-    fn write_failure_diagnostic(&self, out: &mut dyn core::fmt::Write) -> core::fmt::Result {
-        if let Some(failure) = self.last_failure() {
-            write!(out, "{failure:?}")?;
-        }
-        Ok(())
-    }
-
-    fn early_status(&self) -> EarlyStatus {
-        self.early_status
-    }
-    fn early_generation(&self) -> Option<u64> {
-        self.early_generation
-    }
-    fn remembered_early_limits(&self) -> Option<RememberedLimits> {
-        self.early_limits
-    }
-    fn take_early_replay_claim(&mut self) -> Option<ReplayClaim> {
-        self.early_claim.take()
-    }
-    fn has_early_keys(&self) -> bool {
-        self.integrity.is_some() && self.last_failure.is_none() && self.early_key.is_some()
-    }
-    fn seal_early(
-        &mut self,
-        pn: u64,
-        header: &[u8],
-        buffer: &mut [u8],
-        plaintext_len: usize,
-    ) -> Result<usize, tls::Error> {
-        if self.integrity.is_none() {
-            return Err(tls::Error::KeysUnavailable);
-        }
-        if self.side() != Side::Client {
-            return Err(tls::Error::InvalidInput);
-        }
-        if self.last_failure.is_some()
-            || self.application.is_some()
-            || !matches!(
-                self.early_status,
-                EarlyStatus::Offered | EarlyStatus::AcceptedPendingFinished
-            )
-        {
-            return Err(tls::Error::KeysUnavailable);
-        }
-        self.early_key
-            .as_mut()
-            .ok_or(tls::Error::KeysUnavailable)?
-            .seal(pn, header, buffer, plaintext_len)
-            .map_err(map_crypto)
-    }
-    fn open_early(
-        &mut self,
-        pn: u64,
-        header: &[u8],
-        buffer: &mut [u8],
-    ) -> Result<usize, tls::Error> {
-        if self.integrity.is_none() {
-            return Err(tls::Error::KeysUnavailable);
-        }
-        if self.side() != Side::Server {
-            return Err(tls::Error::InvalidInput);
-        }
-        if self.last_failure.is_some()
-            || !matches!(
-                self.early_status,
-                EarlyStatus::AcceptedPendingFinished | EarlyStatus::Accepted
-            )
-        {
-            return Err(tls::Error::KeysUnavailable);
-        }
-        let result = self
-            .early_key
-            .as_ref()
-            .ok_or(tls::Error::KeysUnavailable)?
-            .open(
-                pn,
-                header,
-                buffer,
-                self.integrity.as_mut().ok_or(tls::Error::KeysUnavailable)?,
-            );
-        match result {
-            Err(crypto::Error::IntegrityLimit) => {
-                Err(self.fail(Failure::Crypto(crypto::Error::IntegrityLimit)))
-            }
-            other => other.map_err(map_crypto),
-        }
-    }
-    fn early_header_mask(&self, local: bool, sample: &[u8; 16]) -> Result<[u8; 5], tls::Error> {
-        if self.integrity.is_none() {
-            return Err(tls::Error::KeysUnavailable);
-        }
-        if local != (self.side() == Side::Client) {
-            return Err(tls::Error::InvalidInput);
-        }
-        if self.last_failure.is_some() {
-            return Err(tls::Error::KeysUnavailable);
-        }
-        self.early_key
-            .as_ref()
-            .ok_or(tls::Error::KeysUnavailable)?
-            .header_mask(sample)
-            .map_err(map_crypto)
-    }
-    fn discard_early_keys(&mut self) {
-        self.early_key = None;
-    }
-    fn negotiated_group(&self) -> Option<u16> {
-        self.negotiated_group
-    }
-    fn integrity_budget(&mut self) -> Option<&mut crate::quic::packet_protection::IntegrityBudget> {
-        self.integrity.as_mut()
-    }
-    // The provider never owns a second combined key-update controller.
-    fn confirm_handshake(&mut self) -> Result<(), tls::Error> {
-        Err(tls::Error::Unsupported)
-    }
-    fn maintain_keys(&mut self, _now: u64, _pto: u64) -> Result<(), tls::Error> {
-        Err(tls::Error::Unsupported)
-    }
-    fn acknowledge_one_rtt(
-        &mut self,
-        _pn: u64,
-        _generation: u64,
-        _now: u64,
-        _pto: u64,
-    ) -> Result<(), tls::Error> {
-        Err(tls::Error::Unsupported)
-    }
-    fn receive(&mut self, level: Level, bytes: &[u8]) -> Result<(), tls::Error> {
-        if self.verified_handshake.is_none() || self.last_failure.is_some() {
-            return Err(self.fail(Failure::State));
-        }
-        self.receive_authenticated_ticket_bytes(level, bytes)
-    }
-
-    fn transmit(&mut self, out: &mut [u8]) -> Result<Option<Output>, tls::Error> {
-        if self.last_failure.is_some() {
-            return Err(tls::Error::Handshake);
-        }
-        if self.tx_sent == self.tx_len {
-            return Ok(None);
-        }
-        if out.is_empty() {
-            return Err(tls::Error::Capacity);
-        }
-        // These are byte boundaries in the actual generated flight, not a
-        // parallel handshake-phase or post-handshake completion flag.
-        if self.tx_initial_end > self.tx_handshake_end || self.tx_handshake_end > self.tx_len {
-            return Err(self.fail(Failure::State));
-        }
-        let (level, end) = if self.tx_sent < self.tx_initial_end {
-            (Level::Initial, self.tx_initial_end)
-        } else if self.tx_sent < self.tx_handshake_end {
-            (Level::Handshake, self.tx_handshake_end)
-        } else {
-            (Level::OneRtt, self.tx_len)
-        };
-        let n = out.len().min(end - self.tx_sent);
-        out[..n].copy_from_slice(&self.tx[self.tx_sent..self.tx_sent + n]);
-        self.tx_sent += n;
-        Ok(Some(Output { level, len: n }))
-    }
-    fn has_keys(&self, level: Level) -> bool {
-        if self.integrity.is_none() || self.last_failure.is_some() {
-            return false;
-        }
-        match level {
-            Level::Initial => false,
-            Level::Handshake => self.handshake.is_some(),
-            Level::OneRtt => self.application.is_some(),
-        }
-    }
-    fn discard_keys(&mut self, level: Level) {
-        match level {
-            Level::Initial => {}
-            Level::Handshake => {
-                self.handshake = None;
-                // Before installation, retire the actual fresh agreement secrets.
-                // After installation they have already moved and cannot regenerate.
-                self.ephemeral = None;
-                self.x25519 = None;
-            }
-            Level::OneRtt => {
-                self.application = None;
-                self.early_key = None;
-                self.early_claim = None;
-                self.resumption_master = None;
-                // Destroy derivation material rather than retain a discarded flag.
-                // Existing separately owned Handshake PacketKeys are unaffected.
-                self.schedule.discard();
-                self.ephemeral = None;
-                self.x25519 = None;
-            }
-        }
-    }
-    fn is_handshaking(&self) -> bool {
-        self.verified_handshake.is_none()
-    }
-    fn peer_transport_parameters(&self) -> Option<&[u8]> {
-        if self.verified_handshake.is_some() {
-            Some(&self.parameters[..self.parameters_len])
-        } else {
-            None
-        }
-    }
-    fn seal(
-        &mut self,
-        level: Level,
-        pn: u64,
-        header: &[u8],
-        buffer: &mut [u8],
-        plaintext_len: usize,
-    ) -> Result<usize, tls::Error> {
-        if self.integrity.is_none() {
-            return Err(tls::Error::KeysUnavailable);
-        }
-        if self.last_failure.is_some() {
-            return Err(tls::Error::Handshake);
-        }
-        if level == Level::OneRtt && self.verified_handshake.is_none() {
-            return Err(tls::Error::KeysUnavailable);
-        }
-        if level == Level::OneRtt && header.first().is_none_or(|byte| byte & 4 != 0) {
-            return Err(tls::Error::InvalidInput);
-        }
-        match level {
-            Level::Initial => Err(tls::Error::KeysUnavailable),
-            Level::Handshake => self
-                .handshake
-                .as_mut()
-                .ok_or(tls::Error::KeysUnavailable)?
-                .local
-                .seal(pn, header, buffer, plaintext_len)
-                .map_err(map_crypto),
-            Level::OneRtt => self
-                .application
-                .as_mut()
-                .ok_or(tls::Error::KeysUnavailable)?
-                .local
-                .seal(pn, header, buffer, plaintext_len)
-                .map_err(map_crypto),
-        }
-    }
-    fn open(
-        &mut self,
-        level: Level,
-        pn: u64,
-        header: &[u8],
-        buffer: &mut [u8],
-    ) -> Result<usize, tls::Error> {
-        if self.integrity.is_none() {
-            return Err(tls::Error::KeysUnavailable);
-        }
-        if self.last_failure.is_some() {
-            return Err(tls::Error::Handshake);
-        }
-        if level == Level::OneRtt && self.verified_handshake.is_none() {
-            return Err(tls::Error::KeysUnavailable);
-        }
-        let result = match level {
-            Level::Initial => return Err(tls::Error::KeysUnavailable),
-            Level::Handshake => self
-                .handshake
-                .as_ref()
-                .ok_or(tls::Error::KeysUnavailable)?
-                .remote
-                .open(
-                    pn,
-                    header,
-                    buffer,
-                    self.integrity.as_mut().ok_or(tls::Error::KeysUnavailable)?,
-                ),
-            Level::OneRtt => {
-                let keys = self
-                    .application
-                    .as_mut()
-                    .ok_or(tls::Error::KeysUnavailable)?;
-                if header.first().is_none_or(|byte| byte & 4 != 0) {
-                    return Err(tls::Error::InvalidInput);
-                }
-                keys.remote.open(
-                    pn,
-                    header,
-                    buffer,
-                    self.integrity.as_mut().ok_or(tls::Error::KeysUnavailable)?,
-                )
-            }
-        };
-        match result {
-            Err(crypto::Error::IntegrityLimit) => {
-                Err(self.fail(Failure::Crypto(crypto::Error::IntegrityLimit)))
-            }
-            other => other.map_err(map_crypto),
-        }
-    }
-    fn header_mask(
-        &self,
-        level: Level,
-        local: bool,
-        sample: &[u8; 16],
-    ) -> Result<[u8; 5], tls::Error> {
-        if self.integrity.is_none() {
-            return Err(tls::Error::KeysUnavailable);
-        }
-        if self.last_failure.is_some() {
-            return Err(tls::Error::Handshake);
-        }
-        match level {
-            Level::Initial => Err(tls::Error::KeysUnavailable),
-            Level::Handshake => {
-                let keys = self.handshake.as_ref().ok_or(tls::Error::KeysUnavailable)?;
-                if local {
-                    keys.local.header_mask(sample)
-                } else {
-                    keys.remote.header_mask(sample)
-                }
-                .map_err(map_crypto)
-            }
-            Level::OneRtt => {
-                let keys = self
-                    .application
-                    .as_ref()
-                    .ok_or(tls::Error::KeysUnavailable)?;
-                if local {
-                    keys.local.header_mask(sample)
-                } else {
-                    keys.remote.header_mask(sample)
-                }
-                .map_err(map_crypto)
-            }
-        }
-    }
-}
-
-#[cfg(test)]
-#[path = "../tests/support/async_tls_fixture.rs"]
-pub(crate) mod async_test_fixture;
-
-#[cfg(test)]
-#[path="../tests/support/tls_actor_fixture.rs"]
-pub(crate) mod test_fixture;

@@ -6,8 +6,8 @@ mod arithmetic;
 mod der;
 mod point;
 use super::{hmac::HmacSha256, sha256::Sha256};
-use arithmetic::{Int, N};
 use crate::secret::{Erase, Secret};
+use arithmetic::{Int, N};
 use point::Point;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Error {

@@ -1,164 +1,108 @@
 # hibana-tls
 
-A separate, work-in-progress TLS 1.3 crate for hibana-quic, built around Hibana choreography.
-The core is `no_std` with no default allocator. Optional `alloc` only supports
-Host-owned secret byte vectors. Unsafe Rust is denied except the explicit volatile
-memory boundary in `src/secret/memory.rs`; see MEMORY-BOUNDARY.md.
-Its sole default production dependency is the pinned Hibana core.
+TLS 1.3 handshake and authentication for
+[hibana-quic](https://github.com/hibanaworks/hibana-quic), expressed using Hibana
+protocols and direct role execution. This is a QUIC-specific TLS implementation;
+it does not provide TCP TLS records or a TLS socket API.
 
-This is a working QUIC-specific endpoint integration under regression validation,
-**not a production-security qualification**. This crate now owns `BoundedTls`,
-`KeySource`, private cryptographic operations, the shared transcript global and
-the direct input/verification locals. `owned_global` adds the projected material
-handoff participant used by QUIC. Actual keys and authenticated Finished receipts
-move through owned slots before that participant sends Taken; the next TLS input
-cannot advance before the projected exchange completes.
+The default build is `no_std` without an allocator. Its sole production dependency
+is Hibana. The optional `alloc` feature supports caller-owned secret byte vectors and
+[PEM decoding](src/certificate/pem.rs). It adds no filesystem or operating-system access.
+This is experimental security-sensitive software, not a claim of a complete
+cryptographic security proof.
 
-The production QUIC connection uses `client_owned` / `server_owned`. Reference
-fixtures may also exercise raw two-participant locals; those use direct RefCell
-borrows. CryptoAccess/SourceAccess forwarding adapters have been removed.
-See `DIRECT-LOCAL-MIGRATION.md` for the exact ownership boundary.
+## Start here
 
-Scope is TLS 1.3 handshake and authentication for QUIC. Generic TCP TLS, TLS record
-framing and a general-purpose TLS socket API are out of scope. QUIC-specific
-handshake needs may shape this API; there is no requirement to serve other consumers.
+- [handshake/global.rs](src/handshake/global.rs): legal transcript order.
+- [handshake/localside/](src/handshake/localside/mod.rs): the actual projected TLS roles.
+- [handshake/imp/keys.rs](src/handshake/imp/keys.rs): owned keys and
+  authenticated Finished receipts passed to QUIC.
+- [handshake/imp/](src/handshake/imp/mod.rs): transcript and cryptographic operations
+  used by those roles.
 
-TLS owns transcript order, cryptographic verification, key derivation and secret
-lifetimes. QUIC retains CRYPTO-stream reassembly/retransmission, scoped directional packet-key
-owners and QUIC-specific key retirement; numerical packet material and parameter
-parsing are now shared from this crate. The TLS crate
-has no production dependency on hibana-quic, HTTP/3, an OS, an executor or an allocator.
-Its test-only dependency on QUIC supplies the existing deterministic test runtime.
+`client_owned` and `server_owned` are the roles used by QUIC. The key handoff must
+finish before the projected transcript may accept its next input. Consumers
+should use the QUIC connection entry to compose TLS and packet ownership.
 
-Validation must distinguish executable code, Lean models and actual refinement
-claims. Passing abstract models alone is not proof of cryptographic security or
-constant-time machine code. Reference implementations belong only in tests.
+## How Hibana owns TLS progression
 
-## Initial primitive checks
+Read [global.rs](src/handshake/global.rs), then its
+[owned-key composition](src/handshake/global/owned.rs), then
+[`client_owned` / `server_owned`](src/handshake/localside/verify.rs).
+The globals describe Hello, certificate verification, Finished and key-handoff
+order. Each choreography function returns `impl Projectable`; Rust infers its
+step-list from the `g::send`, `g::seq`, `g::route`, and `g::par` expressions.
+QUIC composes the owned-key TLS global directly into its connection global,
+then projects the combined choreography for each role. The localsides execute
+that order directly through projected endpoints.
 
-SHA-256 and HMAC/HKDF-SHA-256 use fixed storage and no non-Hibana runtime
-library. Tests include public SHA-256 known answers, all three RFC 5869 SHA-256
-cases, TLS label encoding and the final allowed HKDF block. Lean files prove
-selected arithmetic/bit-vector facts only. Secret erasure and target-level
-constant-time qualification remain separate obligations; primitive tests alone do not
-qualify deployment of the integrated endpoint.
+A typical handoff publishes actual key material into
+[`Handoff`](src/handshake/imp/keys.rs), sends `KeysReady`, receives `KeysTaken`,
+and checks that the handoff is empty before sending `Applied`. The next
+transcript step cannot use that branch's completion signal while the previous
+key material remains unconsumed. QUIC checks the associated connection scope
+when it installs the resulting keys and Finished receipts.
 
-The initial ChaCha20 block primitive is also present, with RFC known-answer
-tests and a Lean quarter-round inverse theorem. A fixed-storage Poly1305
-primitive now passes its RFC known answer and 235 independently generated
-Python-integer cases (including all-ones carry stress). Seven Lean arithmetic
-lemmas cover product/carry bounds and modular subtraction, not full Rust
-refinement or cryptographic security. In-place ChaCha20-Poly1305 AEAD composition now also passes the RFC known
-answer, authentication-failure buffer preservation tests and 231 independent
-cryptography/OpenSSL vectors. Four further Lean lemmas check padding and counter
-bounds. The integrated QUIC endpoint uses these primitives; neither their
-known-answer tests nor the ownership migration establish complete security
-qualification.
+[imp/](src/handshake/imp/mod.rs) owns the bounded TLS material, and
+[imp/material/transcript.rs](src/handshake/imp/material/transcript.rs) performs transcript and
+cryptographic operations. It does not choose the next projected endpoint step.
+Pure primitives live in [crypto/](src/crypto), certificate-chain/name checks in
+[x509/](src/x509), and the explicit erasure boundary in [secret/](src/secret).
 
-Poly1305 follows [RFC 8439 section 2.5](https://www.rfc-editor.org/rfc/rfc8439.html#section-2.5).
-The standalone authenticator does not enforce one-time key ownership; the calling
-protocol locals must provide that authority. Machine-code constant-time behavior
-and guaranteed secret erasure remain unqualified.
+## Find the actual endpoint owners
 
-## Integration contract
+The handshake entry module declares `global`, `localside` and the private calculation
+parts. It exports configuration, caller-owned storage and TLS material without
+adding a dispatch object. The material's methods calculate or validate bytes;
+`localside` chooses their order by executing projected endpoint operations.
 
-The QUIC connection must embed this crate's canonical global and execute its
-direct locals. The boundary transfers actual affine directional traffic secrets
-and verified Finished evidence. It must not synchronize two State machines or
-introduce ready/created/discarded flags or communication-proxy wrappers. QUIC
-keeps reassembly, recovery, packet protection and its own confirmation rules.
-This is the central acceptance criterion for the integration work, not an
-optional ergonomic layer. The production direct TLS locals and owned handoff are implemented; full-suite
-results and remaining qualification limits are recorded with each checkpoint.
+- INPUT is `client_input` or `server_input` in [localside/input.rs](src/handshake/localside/input.rs).
+  It owns reassembly input and lends one complete message through `MessageSlot`.
+- VERIFY is `client_owned` or `server_owned` in [localside/verify.rs](src/handshake/localside/verify.rs). Its exclusive
+  endpoint and TLS material govern transcript checks and Finished authentication.
+- HANDOFF appears in [global/owned](src/handshake/global/owned.rs).
+  [Key and handoff storage](src/handshake/imp/keys.rs) holds real key material and
+  authenticated Finished receipts, which QUIC consumes before continuing.
+- QUIC composes and projects this graph with packet receive/transmit and timers.
+  Its [handshake endpoint set](https://github.com/hibanaworks/hibana-quic/blob/ci/parallel-client-retirement/src/quic/localside/mod.rs)
+  projects each role and attaches its Endpoint; its [handshake execution](https://github.com/hibanaworks/hibana-quic/blob/ci/parallel-client-retirement/src/quic/localside/run.rs)
+  owns the actual concurrent futures. TLS does not spawn a hidden executor.
 
+Pure crypto, certificate and wire modules have no message choreography to invent.
+Their correctness requires separate algorithm, parser and memory checks.
 
-## Source layout
+## Guarantees and verification
 
-- `src/global.rs`: transcript message definitions and raw two-party reference graph.
-- `src/owned_global.rs`: the shared three-party TLS/input/material-handoff graph embedded by QUIC.
-- `src/handshake/`: direct locals, private operations and actual affine key/Finished material.
-- `src/endpoint.rs`: the common QUIC TLS interface, reexported by QUIC.
-- `src/crypto/`: fixed-storage arithmetic, including detached-tag in-place AEAD;
-  it contains no protocol controller or communication proxy.
-- `proofs/`: explicitly scoped Lean arithmetic/bit-vector obligations.
-- `tests/*.in`: reproducible independent expected values used by Rust tests.
-- `tools/*_vectors.py`: test-only fixture generators; their Python packages are
-  not Cargo or production dependencies.
+Hibana enforces the permitted per-endpoint transitions, route participation and
+single-owner publication of progress. Rust moves and borrowing constrain the
+ownership and lifetime of key material. The integration also checks that
+Finished and key receipts belong to the same connection scope.
 
-AEAD `open` authenticates before changing caller bytes. Invalid tags preserve
-ciphertext; length limits are checked before encryption. The calling global and
-locals must still guarantee key/nonce uniqueness. That ownership integration,
-guaranteed erasure and target-level timing audits are not completed by these
-primitive tests. See [RFC 8439](https://www.rfc-editor.org/rfc/rfc8439.html#section-2.8).
+Those mechanisms do not establish that an AES implementation, certificate parser
+or key schedule is cryptographically correct. Known-answer, malformed-input,
+independent-oracle and QUIC interoperability tests cover those separate concerns.
+[Secret-memory tests](src/secret.rs) run under Miri for the exercised volatile
+memory and aliasing boundaries; Miri is not a timing or whole-program security
+proof.
 
-AES-128 forward blocks and 96-bit-nonce/full-tag AES-128-GCM are also implemented
-in `crypto/aes128.rs` and `crypto/aes128gcm.rs`. They have fixed-loop arithmetic,
-independent oracle fixtures and bounded counter checks; see `proofs/aes/README.md`
-for the precise validation limits. This is not a claim of audited security or
-constant-time/erasure qualification on any target.
+The sibling QUIC repository also contains Lean proofs and Z3 counterexample
+checks for abstract ownership, cancellation and reclamation models. Their
+assumptions and Rust correspondence matter: they are not an automatic proof of
+this complete TLS implementation. For the runtime's precise premises, see
+[Hibana's guarantees](https://github.com/hibanaworks/hibana/blob/af69def928f498ad474a4d2add238615e175a49b/README.md#guarantees).
 
-`crypto/x25519.rs` implements the raw RFC 7748 arithmetic with fixed 5x51-bit
-storage. See `proofs/x25519/README.md` for independent vector coverage and limited
-arithmetic proofs. A raw shared result is not a verified TLS peer; callers must
-reject zero and preserve actual one-use secret ownership. Integration qualification
-and timing/erasure assessment remain separate obligations.
+## Build
 
-## P-256 extraction candidate
+```sh
+cargo check --locked --lib
+cargo check --locked --lib --target thumbv6m-none-eabi
+```
 
-Own fixed-storage P-256 field/scalar arithmetic, ECDH, RFC6979 ECDSA and strict
-SEC1/PKCS8 decoding are present. The accompanying QUIC candidate removes p256
-and hmac together from resolved root, host and reference dependency graphs.
-See proofs/p256/README.md for independent comparison coverage and explicit
-limits. These tests do not establish production side-channel safety or complete
-compiler-proof erasure; the cryptographic qualification remains separate from the direct-local integration.
+To run the integration tests, place the matching `hibana-quic` repository beside
+this repository, then run `cargo test --locked`.
 
-The SHA-256 integration corpus additionally compares 810 Python hashlib known
-answers across padding/block boundaries, each through ten incremental chunk
-sizes. It complements the existing million-byte known answer and state-preserving
-overflow rejection tests; it is not a security or compiler refinement proof.
+See [supported certificate profile](X509-PROFILE.md) and
+[secret-memory boundary](MEMORY-BOUNDARY.md) before integrating. Unsafe Rust is
+limited to the explicit volatile secret-memory boundary.
 
-Own RSA public modular exponentiation supports the bounded 2048/3072/4096-bit
-verification profile. Public operands permit variable-time arithmetic branches;
-this primitive must never be used for private-key operations. Its 144 independent
-Python pow cases and failure-output checks are documented in proofs/rsa/README.md.
-Protocol ordering and authority remain the responsibility of Hibana locals;
-there is no separate RSA protocol state machine or progress flag.
-
-The bounded X.509 KeyUsage reader in `src/x509/key_usage.rs` consumes borrowed
-DER slices without allocation or a protocol-progress controller. It checks
-canonical TLV lengths, exact admitted nesting, extension count and KeyUsage
-bits. It is not a general DER validator or certificate authenticator: signature,
-name, validity, chain and critical-extension verification remain mandatory in
-the owning verifier. The integration reference suite retains an independent
-RustCrypto DER parser for 10,240 grammar comparisons, truncation/bit-mutation
-rejection and duplicate/critical/capacity cases. Arithmetic and parser cursors
-represent actual data consumption, not a second TLS state machine.
-
-`entropy::Entropy` is the caller's direct cryptographic input capability, with
-one fallible whole-buffer operation. It does not own an RNG implementation,
-external package adapter or protocol progression. Production callers must supply
-a trusted cryptographic platform source; deterministic implementations are for
-tests only. Failure never authorizes use of partially filled key material.
-
-
-## Canonical numerical implementation
-
-The QUIC crate now directly reexports this crate's schedule, wire and RSA types;
-there is no second implementation or runtime forwarding adapter. The existing
-independent protocol/certificate reference tests still consume the same API.
-Traffic secrets move once while distinct Finished keys remain with the numeric
-owner. The resumed/full choice is held by the projected local continuation in
-this crate's direct local continuation, not stored as a second control flag. Finished authority
-is retained by the actual RX continuation and lent for subsequent ticket input.
-The private Finished-minting operations must not be exposed as arbitrary public
-callbacks merely to cross a crate boundary. The direct-local implementation now lives here; QUIC consumes the same types
-and global. Numerical moves alone are not evidence of cryptographic qualification.
-
-
-## Owned certificate validation candidate
-
-See [X509-PROFILE.md](X509-PROFILE.md) for exact accepted/rejected forms and
-qualification limits. The product path no longer imports rustls-webpki,
-rustls-pki-types or untrusted, and no copied webpki source is retained. Borrowed
-certificate inputs and trust anchors are project-owned. Host/reference fixtures
-remain separately qualified; a package count is not a security proof.
+Licensed under MIT OR Apache-2.0; see LICENSE-MIT and LICENSE-APACHE.

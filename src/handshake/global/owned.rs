@@ -1,14 +1,29 @@
 //! TLS transcript order with an explicit affine-material handoff participant.
 //! This graph is for the direct QUIC/TLS composition, not a runtime controller.
-pub use crate::global::{
-    Applied, Certificate, CertificateVerify, ClientStart, Complete, Extensions, Finished, Full,
-    Hello, HelloReady, INPUT, NeedCertificate, NeedCertificateVerify, NeedExtensions, NeedFinished,
-    NeedHello, NeedRetryHello, Resumed, Retry, RetryHello, ServerStart, VERIFY,
-};
-use hibana::{
-    g,
-    runtime::program::{RoleProgram, project},
-};
+pub use crate::handshake::global::Applied;
+pub use crate::handshake::global::Certificate;
+pub use crate::handshake::global::CertificateVerify;
+pub use crate::handshake::global::ClientStart;
+pub use crate::handshake::global::Complete;
+pub use crate::handshake::global::Extensions;
+pub use crate::handshake::global::Finished;
+pub use crate::handshake::global::Full;
+pub use crate::handshake::global::Hello;
+pub use crate::handshake::global::HelloReady;
+pub use crate::handshake::global::INPUT;
+pub use crate::handshake::global::NeedCertificate;
+pub use crate::handshake::global::NeedCertificateVerify;
+pub use crate::handshake::global::NeedExtensions;
+pub use crate::handshake::global::NeedFinished;
+pub use crate::handshake::global::NeedHello;
+pub use crate::handshake::global::NeedRetryHello;
+pub use crate::handshake::global::Resumed;
+pub use crate::handshake::global::Retry;
+pub use crate::handshake::global::RetryHello;
+pub use crate::handshake::global::ServerStart;
+pub use crate::handshake::global::VERIFY;
+use hibana::g;
+use hibana::runtime::program::Projectable;
 // The existing QUIC composition uses roles 0..32. This is its independent
 // material consumer; no existing endpoint is aliased or driven twice.
 pub const HANDOFF: u8 = 33;
@@ -21,59 +36,7 @@ pub type FullKeys = g::Msg<245, ()>;
 pub type CompleteKeys = g::Msg<246, ()>;
 pub type ClientKeys = g::Msg<247, ()>;
 pub type ServerKeys = g::Msg<248, ()>;
-pub type KeyTransfer =
-    g::Seq<g::Send<VERIFY, HANDOFF, KeysReady>, g::Send<HANDOFF, VERIFY, KeysTaken>>;
-pub type Receive<N, D> = g::Seq<
-    g::Send<VERIFY, INPUT, N>,
-    g::Seq<g::Send<INPUT, VERIFY, D>, g::Seq<KeyTransfer, g::Send<VERIFY, INPUT, Applied>>>,
->;
-pub type HelloFlow = g::Seq<
-    Receive<NeedHello, Hello>,
-    g::Route<
-        g::Seq<
-            g::Send<VERIFY, INPUT, Retry>,
-            g::Seq<g::Send<VERIFY, HANDOFF, RetryKeys>, Receive<NeedRetryHello, RetryHello>>,
-        >,
-        g::Seq<g::Send<VERIFY, INPUT, HelloReady>, g::Send<VERIFY, HANDOFF, HelloKeys>>,
-    >,
->;
-pub type CertificateFlow = g::Seq<
-    Receive<NeedCertificate, Certificate>,
-    Receive<NeedCertificateVerify, CertificateVerify>,
->;
-pub type FinishFlow = g::Seq<
-    Receive<NeedFinished, Finished>,
-    g::Seq<g::Send<VERIFY, INPUT, Complete>, g::Send<VERIFY, HANDOFF, CompleteKeys>>,
->;
-pub type ClientFlow = g::Seq<
-    HelloFlow,
-    g::Seq<
-        Receive<NeedExtensions, Extensions>,
-        g::Seq<
-            g::Route<
-                g::Seq<g::Send<VERIFY, INPUT, Resumed>, g::Send<VERIFY, HANDOFF, ResumedKeys>>,
-                g::Seq<
-                    g::Send<VERIFY, INPUT, Full>,
-                    g::Seq<g::Send<VERIFY, HANDOFF, FullKeys>, CertificateFlow>,
-                >,
-            >,
-            FinishFlow,
-        >,
-    >,
->;
-pub type ServerFlow = g::Seq<HelloFlow, FinishFlow>;
-pub type Flow = g::Route<
-    g::Seq<
-        g::Send<VERIFY, INPUT, ClientStart>,
-        g::Seq<g::Send<VERIFY, HANDOFF, ClientKeys>, ClientFlow>,
-    >,
-    g::Seq<
-        g::Send<VERIFY, INPUT, ServerStart>,
-        g::Seq<g::Send<VERIFY, HANDOFF, ServerKeys>, ServerFlow>,
-    >,
->;
-fn receive<N: g::Message<Payload = ()>, D: g::Message<Payload = ()>>() -> g::Program<Receive<N, D>>
-{
+fn receive<N: g::Message<Payload = ()>, D: g::Message<Payload = ()>>() -> impl Projectable {
     g::seq(
         g::send::<VERIFY, INPUT, N>(),
         g::seq(
@@ -88,7 +51,7 @@ fn receive<N: g::Message<Payload = ()>, D: g::Message<Payload = ()>>() -> g::Pro
         ),
     )
 }
-fn hello() -> g::Program<HelloFlow> {
+fn hello() -> impl Projectable {
     g::seq(
         receive::<NeedHello, Hello>(),
         g::route(
@@ -106,7 +69,7 @@ fn hello() -> g::Program<HelloFlow> {
         ),
     )
 }
-fn finish() -> g::Program<FinishFlow> {
+fn finish() -> impl Projectable {
     g::seq(
         receive::<NeedFinished, Finished>(),
         g::seq(
@@ -115,7 +78,7 @@ fn finish() -> g::Program<FinishFlow> {
         ),
     )
 }
-pub fn client() -> g::Program<ClientFlow> {
+pub fn client() -> impl Projectable {
     g::seq(
         hello(),
         g::seq(
@@ -142,10 +105,10 @@ pub fn client() -> g::Program<ClientFlow> {
         ),
     )
 }
-pub fn server() -> g::Program<ServerFlow> {
+pub fn server() -> impl Projectable {
     g::seq(hello(), finish())
 }
-pub fn choreography() -> g::Program<Flow> {
+pub fn choreography() -> impl Projectable {
     g::route(
         g::seq(
             g::send::<VERIFY, INPUT, ClientStart>(),
@@ -156,17 +119,4 @@ pub fn choreography() -> g::Program<Flow> {
             g::seq(g::send::<VERIFY, HANDOFF, ServerKeys>(), server()),
         ),
     )
-}
-pub struct Programs {
-    pub input: RoleProgram<INPUT>,
-    pub verify: RoleProgram<VERIFY>,
-    pub handoff: RoleProgram<HANDOFF>,
-}
-pub fn programs() -> Programs {
-    let graph = choreography();
-    Programs {
-        input: project(&graph),
-        verify: project(&graph),
-        handoff: project(&graph),
-    }
 }

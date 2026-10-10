@@ -29,4 +29,3 @@ impl Limits {
             && self.stream_data_uni <= MAX_OFFSET
     }
 }
-

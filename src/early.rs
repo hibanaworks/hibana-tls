@@ -1,6 +1,7 @@
 //! Bounded remembered transport policy and actual local replay claims.
 //! This module grants no packet, Finished or application-delivery authentication.
-use crate::quic::parameters::{Parameters, Peer};
+use crate::quic::parameters::Parameters;
+use crate::quic::parameters::Peer;
 const MAX: u64 = (1 << 62) - 1;
 const MAX_STREAMS: u64 = 1 << 60;
 pub const REMEMBERED_BYTES: usize = 73;
@@ -328,7 +329,9 @@ pub struct ReplayClaim {
 }
 impl ReplayClaim {
     /// Consume the local replay claim into its actual identifiers; identifiers alone do not authenticate packets or Finished.
-    pub fn into_parts(self) -> ([u8; 16], u64, u64) { (self.issuer, self.generation, self.serial) }
+    pub fn into_parts(self) -> ([u8; 16], u64, u64) {
+        (self.issuer, self.generation, self.serial)
+    }
     pub fn generation(&self) -> u64 {
         self.generation
     }
@@ -406,10 +409,9 @@ impl<'a, const N: usize> ReplayLedger<'a, N> {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
- use super::*;
+    use super::*;
     // Syntactically valid server parameters, including required connection IDs.
     const PARAMS: &[u8] = &[
         0, 0, 15, 0, 4, 1, 16, 5, 1, 8, 6, 1, 8, 7, 1, 8, 8, 1, 1, 9, 1, 1,
@@ -582,5 +584,4 @@ mod tests {
         ));
         assert!(!ledger.storage.entries.iter().any(|e| e.occupied));
     }
-
 }

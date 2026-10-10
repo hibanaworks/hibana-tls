@@ -8,11 +8,11 @@
 //! packet-number spaces/replay state, and check authenticated reserved bits.
 //!
 //! One `PacketKey` owns one direction and encryption level. Do not reconstruct a
-//! sending key from the same secret: its local nonce-use guard cannot see another
+//! sending key from the same secret: its localside nonce-use guard cannot see another
 //! instance. Keep one `IntegrityBudget` for the entire quic, including old
 //! receive generations. No operation allocates or obtains random numbers.
 
-use crate::crypto::{aes128, aes128gcm, chacha20, chacha20poly1305, hkdf};
+use crate::crypto::{aes128gcm, chacha20, chacha20poly1305, hkdf};
 use crate::quic::version::Version;
 use crate::secret::{Erase, Secret};
 
@@ -202,6 +202,7 @@ pub struct PacketKey {
 /// Actual secret storage. Retirement removes this owner, rather than retaining
 /// erased arrays alongside a separate liveness flag.
 struct PacketMaterial {
+    arithmetic: aes128gcm::Arithmetic,
     secret: [u8; 32],
     key: [u8; 32],
     iv: [u8; 12],
@@ -242,6 +243,7 @@ impl PacketKey {
             return Err(Error::KeyDerivation);
         }
         let mut material = PacketMaterial {
+            arithmetic: aes128gcm::Arithmetic::select(),
             secret: *secret,
             key: [0; 32],
             iv: [0; 12],
@@ -430,13 +432,15 @@ impl PacketKey {
         self.sealed += 1;
         let (body, tag_out) = buffer[..used].split_at_mut(plaintext_len);
         let result = match self.suite {
-            CipherSuite::Aes128GcmSha256 => aes128gcm::seal(
-                material.key[..16].try_into().expect("AES key width"),
-                &nonce,
-                header,
-                body,
-            )
-            .map_err(|_| ()),
+            CipherSuite::Aes128GcmSha256 => material
+                .arithmetic
+                .seal(
+                    material.key[..16].try_into().expect("AES key width"),
+                    &nonce,
+                    header,
+                    body,
+                )
+                .map_err(|_| ()),
             CipherSuite::ChaCha20Poly1305Sha256 => {
                 chacha20poly1305::seal(&material.key, &nonce, header, body).map_err(|_| ())
             }
@@ -476,14 +480,16 @@ impl PacketKey {
         budget.before_attempt(self.suite)?;
         let (body, tag) = buffer.split_at_mut(len);
         let result = match self.suite {
-            CipherSuite::Aes128GcmSha256 => aes128gcm::open(
-                material.key[..16].try_into().expect("AES key width"),
-                &nonce,
-                header,
-                body,
-                (&*tag).try_into().expect("detached tag width"),
-            )
-            .map_err(|_| ()),
+            CipherSuite::Aes128GcmSha256 => material
+                .arithmetic
+                .open(
+                    material.key[..16].try_into().expect("AES key width"),
+                    &nonce,
+                    header,
+                    body,
+                    (&*tag).try_into().expect("detached tag width"),
+                )
+                .map_err(|_| ()),
             CipherSuite::ChaCha20Poly1305Sha256 => chacha20poly1305::open(
                 &material.key,
                 &nonce,
@@ -509,7 +515,7 @@ impl PacketKey {
         let mut mask = [0; 5];
         match self.suite {
             CipherSuite::Aes128GcmSha256 => {
-                let mut block = aes128::block(
+                let mut block = (material.arithmetic.block)(
                     material.hp[..16].try_into().expect("AES HP key width"),
                     sample,
                 );
@@ -761,6 +767,7 @@ mod tests {
     #[test]
     fn packet_material_erases_all_secret_fields() {
         let mut material = super::PacketMaterial {
+            arithmetic: crate::crypto::aes128gcm::Arithmetic::select(),
             secret: [1; 32],
             key: [2; 32],
             iv: [3; 12],

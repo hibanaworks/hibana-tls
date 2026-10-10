@@ -618,8 +618,14 @@ mod tests {
         assert!(schedule.early_psk.is_none());
         assert!(schedule.early_without_psk.is_none());
         let handshake = *schedule.handshake_secret.as_ref().unwrap().as_bytes();
-        assert_eq!(schedule.derive_handshake(&[1;32], &transcript), Err(Error::WrongStage));
-        assert_eq!(schedule.handshake_secret.as_ref().unwrap().as_bytes(), &handshake);
+        assert_eq!(
+            schedule.derive_handshake(&[1; 32], &transcript),
+            Err(Error::WrongStage)
+        );
+        assert_eq!(
+            schedule.handshake_secret.as_ref().unwrap().as_bytes(),
+            &handshake
+        );
         append_server_authentication(&mut transcript);
         transcript.append(&server_fin()).unwrap();
         schedule.derive_master(&transcript).unwrap();
@@ -631,7 +637,10 @@ mod tests {
         schedule.derive_resumption(&transcript).unwrap();
         assert!(schedule.master_secret.is_none());
         assert!(schedule.resumption.is_some());
-        assert_eq!(schedule.derive_resumption(&transcript), Err(Error::WrongStage));
+        assert_eq!(
+            schedule.derive_resumption(&transcript),
+            Err(Error::WrongStage)
+        );
     }
 
     use super::*;
