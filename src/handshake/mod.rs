@@ -42,6 +42,19 @@ pub trait MessageInput {
     ) -> impl core::future::Future<Output = Result<usize, Error>>;
 }
 
+impl<F> MessageInput for F
+where
+    F: for<'a> core::ops::AsyncFnMut(crate::quic::Level, &'a mut [u8]) -> Result<usize, Error>,
+{
+    async fn read_message(
+        &mut self,
+        level: crate::quic::Level,
+        bytes: &mut [u8],
+    ) -> Result<usize, Error> {
+        self(level, bytes).await
+    }
+}
+
 pub use imp::material::BoundedTls;
 
 use hibana::EndpointError;

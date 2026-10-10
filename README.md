@@ -5,9 +5,10 @@ TLS 1.3 handshake and authentication for
 protocols and direct role execution. This is a QUIC-specific TLS implementation;
 it does not provide TCP TLS records or a TLS socket API.
 
-The default build is `no_std` without an allocator. Its sole production dependency
-is Hibana. The optional `alloc` feature supports caller-owned secret byte vectors and
-[PEM decoding](src/certificate/pem.rs). It adds no filesystem or operating-system access.
+The library is `no_std` and does not link the `alloc` crate. Its sole production
+dependency is Hibana. [PEM decoding](src/certificate/pem.rs) writes into caller-owned
+byte storage and returns borrowed DER. Secret key storage is erased when its owner
+is dropped. There is no filesystem or operating-system access.
 This is experimental security-sensitive software, not a claim of a complete
 cryptographic security proof.
 
@@ -44,7 +45,7 @@ key material remains unconsumed. QUIC checks the associated connection scope
 when it installs the resulting keys and Finished receipts.
 
 [imp/](src/handshake/imp/mod.rs) owns the bounded TLS material, and
-[imp/transcript.rs](src/handshake/imp/transcript.rs) performs transcript and
+[imp/material/transcript.rs](src/handshake/imp/material/transcript.rs) performs transcript and
 cryptographic operations. It does not choose the next projected endpoint step.
 Pure primitives live in [crypto/](src/crypto), certificate-chain/name checks in
 [x509/](src/x509), and the explicit erasure boundary in [secret/](src/secret).

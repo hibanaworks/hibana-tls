@@ -10,7 +10,7 @@
 //! INPUT executes `localside::input::client_input` / `localside::input::server_input`; VERIFY executes
 //! `localside::verify::client_owned` / `localside::verify::server_owned` when QUIC composes the owned-key
 //! graph. The enclosing connection attaches and polls those real endpoints.
-//! See [`crate::handshake::local`] and [`crate::handshake::global::owned`].
+//! See [`crate::handshake::localside`] and [`crate::handshake::global::owned`].
 use hibana::g;
 use hibana::runtime::program::Projectable;
 

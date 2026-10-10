@@ -20,8 +20,6 @@ pub mod certificate;
 pub mod early;
 pub mod ticket;
 
-#[cfg(feature = "alloc")]
-extern crate alloc;
 pub mod secret;
 
 pub mod key_exchange;
@@ -29,3 +27,19 @@ pub mod key_exchange;
 pub mod quic;
 
 pub mod handshake;
+
+#[cfg(test)]
+#[global_allocator]
+static TEST_ALLOCATOR: actor_test_allocator::Counting = actor_test_allocator::Counting;
+
+#[cfg(test)]
+mod allocator_instrumentation {
+    #[test]
+    #[should_panic(expected = "allocated")]
+    fn counter_rejects_a_real_allocation() {
+        let guard = actor_test_allocator::NoAlloc::start();
+        let bytes = std::vec![core::hint::black_box(7_u8); 64];
+        core::hint::black_box(&bytes);
+        guard.finish();
+    }
+}

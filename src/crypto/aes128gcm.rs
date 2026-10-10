@@ -23,40 +23,117 @@ fn multiply(x: u128, mut v: u128) -> u128 {
     }
     z
 }
-fn absorb(mut y: u128, h: u128, bytes: &[u8]) -> u128 {
+#[cfg(all(target_arch = "x86_64", not(miri)))]
+#[allow(unsafe_code)]
+mod native;
+
+/// Immutable physical arithmetic selected at key installation. Contains no
+/// secret, protocol state, mutable cache, or operating-system dependency.
+type HashTransform = fn(u128, &[u8], &[u8], u128) -> u128;
+
+pub(crate) struct Arithmetic {
+    pub(crate) block: aes128::BlockTransform,
+    counter: aes128::CounterTransform,
+    hash: HashTransform,
+}
+impl Arithmetic {
+    pub(crate) fn select() -> Self {
+        #[cfg(all(target_arch = "x86_64", not(miri)))]
+        let hash = native::select_hash().unwrap_or(hash);
+        #[cfg(not(all(target_arch = "x86_64", not(miri))))]
+        let hash = hash;
+        Self {
+            block: aes128::select(),
+            counter: aes128::counter_transform(),
+            hash,
+        }
+    }
+}
+#[cfg(test)]
+fn multiplier(h: u128) -> impl Fn(u128) -> u128 {
+    #[cfg(all(target_arch = "x86_64", not(miri)))]
+    let product = native::select().unwrap_or(multiply);
+    #[cfg(not(all(target_arch = "x86_64", not(miri))))]
+    let product = multiply;
+    move |x| product(x, h)
+}
+
+fn absorb(mut y: u128, product: &impl Fn(u128) -> u128, bytes: &[u8]) -> u128 {
     let mut blocks = bytes.chunks_exact(16);
     for chunk in &mut blocks {
         let block: &[u8; 16] = chunk.try_into().expect("complete GHASH block");
-        y = multiply(y ^ u128::from_be_bytes(*block), h);
+        y = product(y ^ u128::from_be_bytes(*block));
     }
     let tail = blocks.remainder();
     if !tail.is_empty() {
         let mut block = [0u8; 16];
         block[..tail.len()].copy_from_slice(tail);
-        y = multiply(y ^ u128::from_be_bytes(block), h);
+        y = product(y ^ u128::from_be_bytes(block));
     }
     y
 }
-fn tag(key: &[u8; 16], nonce: &[u8; 12], aad: &[u8], body: &[u8], lens: (u64, u64)) -> [u8; 16] {
-    let h = u128::from_be_bytes(aes128::block(key, &[0; 16]));
-    let y = absorb(absorb(0, h, aad), h, body);
-    let encoded = (u128::from(lens.0) << 64) | u128::from(lens.1);
-    let hash = multiply(y ^ encoded, h);
-    let mut j0 = [0; 16];
-    j0[..12].copy_from_slice(nonce);
-    j0[15] = 1;
-    (hash ^ u128::from_be_bytes(aes128::block(key, &j0))).to_be_bytes()
+fn hash(h: u128, aad: &[u8], body: &[u8], encoded: u128) -> u128 {
+    let product = |x| multiply(x, h);
+    let y = absorb(absorb(0, &product, aad), &product, body);
+    product(y ^ encoded)
 }
-fn xor(key: &[u8; 16], nonce: &[u8; 12], body: &mut [u8]) {
-    let mut input = [0; 16];
-    input[..12].copy_from_slice(nonce);
-    for (i, chunk) in body.chunks_mut(16).enumerate() {
-        let count = u32::try_from(i as u64 + 2).expect("preflighted GCM block counter");
-        input[12..].copy_from_slice(&count.to_be_bytes());
-        let stream = aes128::block(key, &input);
-        for (byte, mask) in chunk.iter_mut().zip(stream) {
-            *byte ^= mask;
+
+impl Arithmetic {
+    fn tag(
+        &self,
+        key: &[u8; 16],
+        nonce: &[u8; 12],
+        aad: &[u8],
+        body: &[u8],
+        lens: (u64, u64),
+    ) -> [u8; 16] {
+        let h = u128::from_be_bytes((self.block)(key, &[0; 16]));
+        let encoded = (u128::from(lens.0) << 64) | u128::from(lens.1);
+        let hash = (self.hash)(h, aad, body, encoded);
+        let mut j0 = [0; 16];
+        j0[..12].copy_from_slice(nonce);
+        j0[15] = 1;
+        (hash ^ u128::from_be_bytes((self.block)(key, &j0))).to_be_bytes()
+    }
+    fn xor(&self, key: &[u8; 16], nonce: &[u8; 12], body: &mut [u8]) {
+        (self.counter)(key, nonce, body);
+    }
+    /// Encrypt in place. Invalid lengths are rejected before mutating any byte.
+    pub(crate) fn seal(
+        &self,
+        key: &[u8; 16],
+        nonce: &[u8; 12],
+        aad: &[u8],
+        body: &mut [u8],
+    ) -> Result<[u8; 16], Error> {
+        let lens = lengths(
+            u64::try_from(aad.len()).map_err(|_| Error::Length)?,
+            u64::try_from(body.len()).map_err(|_| Error::Length)?,
+        )?;
+        self.xor(key, nonce, body);
+        Ok(self.tag(key, nonce, aad, body, lens))
+    }
+    /// Verify ciphertext before decryption. Authentication failure leaves it intact.
+    pub(crate) fn open(
+        &self,
+        key: &[u8; 16],
+        nonce: &[u8; 12],
+        aad: &[u8],
+        body: &mut [u8],
+        received: &[u8; 16],
+    ) -> Result<(), Error> {
+        let lens = lengths(
+            u64::try_from(aad.len()).map_err(|_| Error::Length)?,
+            u64::try_from(body.len()).map_err(|_| Error::Length)?,
+        )?;
+        let expected = self.tag(key, nonce, aad, body, lens);
+        if !bool::from(crate::secret::FixedTimeEq::fixed_time_eq(
+            &expected, received,
+        )) {
+            return Err(Error::Authentication);
         }
+        self.xor(key, nonce, body);
+        Ok(())
     }
 }
 /// Encrypt in place. Invalid lengths are rejected before mutating any byte.
@@ -66,12 +143,7 @@ pub fn seal(
     aad: &[u8],
     body: &mut [u8],
 ) -> Result<[u8; 16], Error> {
-    let lens = lengths(
-        u64::try_from(aad.len()).map_err(|_| Error::Length)?,
-        u64::try_from(body.len()).map_err(|_| Error::Length)?,
-    )?;
-    xor(key, nonce, body);
-    Ok(tag(key, nonce, aad, body, lens))
+    Arithmetic::select().seal(key, nonce, aad, body)
 }
 /// Verify ciphertext before decryption. Authentication failure leaves it intact.
 pub fn open(
@@ -81,21 +153,69 @@ pub fn open(
     body: &mut [u8],
     received: &[u8; 16],
 ) -> Result<(), Error> {
-    let lens = lengths(
-        u64::try_from(aad.len()).map_err(|_| Error::Length)?,
-        u64::try_from(body.len()).map_err(|_| Error::Length)?,
-    )?;
-    let expected = tag(key, nonce, aad, body, lens);
-    if !bool::from(crate::secret::FixedTimeEq::fixed_time_eq(
-        &expected, received,
-    )) {
-        return Err(Error::Authentication);
-    }
-    xor(key, nonce, body);
-    Ok(())
+    Arithmetic::select().open(key, nonce, aad, body, received)
 }
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn in_place_roundtrip_and_rejected_tag_preserve_storage() {
+        let key = [0u8; 16];
+        let nonce = [0u8; 12];
+        let mut body = [0u8; 16];
+        let tag = seal(&key, &nonce, &[], &mut body).unwrap();
+        let ciphertext = body;
+        let mut rejected = tag;
+        rejected[15] ^= 1;
+        assert_eq!(
+            open(&key, &nonce, &[], &mut body, &rejected),
+            Err(Error::Authentication)
+        );
+        assert_eq!(body, ciphertext);
+        open(&key, &nonce, &[], &mut body, &tag).unwrap();
+        assert_eq!(body, [0; 16]);
+    }
+
+    #[test]
+    fn whole_hash_matches_scalar_for_independent_aad_and_body_tails() {
+        let bytes: [u8; 4097] = core::array::from_fn(|i| (i.wrapping_mul(197) + 43) as u8);
+        let arithmetic = Arithmetic::select();
+        let lengths = [
+            0, 1, 7, 15, 16, 17, 31, 32, 33, 63, 64, 65, 255, 256, 257, 1500, 4097,
+        ];
+        for seed in 0..8u128 {
+            let h = seed.wrapping_mul(0xa35bc73e49f1280de371aa0396bdcf51)
+                ^ 0x66e94bd4ef8a2c3b884cfa59ca342b2e;
+            for &aad_len in &lengths[..13] {
+                for &body_len in &lengths {
+                    let encoded = ((aad_len as u128 * 8) << 64) | (body_len as u128 * 8);
+                    let aad = &bytes[1..1 + aad_len];
+                    let body = &bytes[..body_len];
+                    assert_eq!(
+                        (arithmetic.hash)(h, aad, body, encoded),
+                        hash(h, aad, body, encoded),
+                        "seed={seed} aad={aad_len} body={body_len}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn native_product_matches_all_polynomial_basis_pairs() {
+        for i in 0..128 {
+            let h = 1u128 << i;
+            let product = super::multiplier(h);
+            for j in 0..128 {
+                let x = 1u128 << j;
+                assert_eq!(product(x), super::multiply(x, h), "basis {i} {j}");
+            }
+        }
+        for seed in 0..1024u128 {
+            let x = seed.wrapping_mul(0xa35bc73e49f1280de371aa0396bdcf51);
+            let h = x.rotate_left(53) ^ 0xb96ca712089345aadc729e80b153ed01;
+            assert_eq!(super::multiplier(h)(x), super::multiply(x, h));
+        }
+    }
     use super::*;
     #[test]
     fn borrowed_full_blocks_and_padded_tails_match_ghash() {
@@ -108,7 +228,10 @@ mod tests {
                 padded[..chunk.len()].copy_from_slice(chunk);
                 expected = multiply(expected ^ u128::from_be_bytes(padded), h);
             }
-            assert_eq!(absorb(0x123456789abcdef0, h, &bytes[..len]), expected);
+            assert_eq!(
+                absorb(0x123456789abcdef0, &multiplier(h), &bytes[..len]),
+                expected
+            );
         }
     }
 

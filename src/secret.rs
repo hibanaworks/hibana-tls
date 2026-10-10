@@ -18,15 +18,14 @@ impl Erase for [u8] {
         memory::erase(self)
     }
 }
+impl Erase for &mut [u8] {
+    fn erase(&mut self) {
+        memory::erase(self)
+    }
+}
 impl<const N: usize> Erase for [u8; N] {
     fn erase(&mut self) {
         self.as_mut_slice().erase()
-    }
-}
-#[cfg(feature = "alloc")]
-impl Erase for alloc::vec::Vec<u8> {
-    fn erase(&mut self) {
-        memory::erase_allocation(self)
     }
 }
 

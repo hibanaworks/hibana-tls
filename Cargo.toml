@@ -8,11 +8,10 @@ license = "MIT OR Apache-2.0"
 description = "Work-in-progress no_std, allocation-free TLS choreography for Hibana"
 
 [dependencies]
-hibana = { git = "https://github.com/hibanaworks/hibana", rev = "5aa9ac1ad7b28ca05896dbed9270641b865d8b9d", default-features = false }
+hibana = { git = "https://github.com/hibanaworks/hibana", rev = "6ed1923c9447e48cfd3e4bb0f2d6f12126e2b452", default-features = false }
 
 [features]
 default = []
-alloc = []
 
 [dev-dependencies]
 hibana-quic = { path = "../hibana-quic" }
@@ -22,3 +21,4 @@ actor-test-allocator = { path = "../hibana-quic/tests/support/actor-test-allocat
 # Cargo ignores this test-workspace patch when TLS is consumed as a dependency.
 [patch."https://github.com/hibanaworks/hibana-tls"]
 hibana-tls = { path = "." }
+

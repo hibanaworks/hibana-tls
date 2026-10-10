@@ -13,9 +13,7 @@ use crate::{
 
 use super::config::*;
 use super::keys;
-#[path = "provider.rs"]
 mod provider;
-#[path = "transcript.rs"]
 mod transcript;
 enum Resumption<'a> {
     Client(ClientResumption<'a>),
