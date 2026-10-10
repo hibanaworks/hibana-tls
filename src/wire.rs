@@ -4,7 +4,7 @@
 //! four-byte headers. It performs no cryptography, transcript update, certificate
 //! verification, key installation, or state transition. Those belong to Provider.
 //! Profile: TLS 1.3, SHA-256 suites 0x1301/0x1303, P-256/X25519 key shares,
-//! ECDSA/P-256 and bounded RSA-PSS/SHA-256 CertificateVerify, hq-interop ALPN,
+//! ECDSA/P-256 and bounded RSA-PSS/SHA-256 CertificateVerify, explicit ALPN,
 //! QUIC TP extension 0x39,
 //! empty legacy session IDs and certificate-request context. Bounded HRR syntax
 //! supports selected-group and cookie-only retries. Explicit *_psk APIs add
@@ -46,7 +46,7 @@ impl CipherPolicy {
     }
 }
 
-pub const ALPN: &[u8] = b"hq-interop";
+pub const ALPN: &[u8] = b"hibana/1";
 pub const GROUP_P256: u16 = 23;
 pub const GROUP_X25519: u16 = 29;
 pub const SIGNATURE_P256_SHA256: u16 = 0x0403;
@@ -394,14 +394,26 @@ fn parse_client_shares(data: &[u8]) -> Result<(&[u8], &[u8]), Error> {
 /// parser: cookies require validate_client_hello_retry and retained CH1 state.
 /// PSK/early-data/post-handshake-auth requests are not negotiated.
 pub fn parse_client_hello(message: &[u8]) -> Result<ClientHello<'_>, Error> {
-    parse_client_hello_context(message, false, false, false, Some(crate::Protocol::Http09))
+    parse_client_hello_context(
+        message,
+        false,
+        false,
+        false,
+        Some(crate::Protocol::default()),
+    )
 }
 /// Bounded PSK_DHE offer parser. It does not authenticate the binder or ticket.
 pub fn parse_client_hello_psk(message: &[u8]) -> Result<ClientHello<'_>, Error> {
-    parse_client_hello_context(message, false, true, false, Some(crate::Protocol::Http09))
+    parse_client_hello_context(
+        message,
+        false,
+        true,
+        false,
+        Some(crate::Protocol::default()),
+    )
 }
 pub fn parse_client_hello_early(message: &[u8]) -> Result<ClientHello<'_>, Error> {
-    parse_client_hello_context(message, false, true, true, Some(crate::Protocol::Http09))
+    parse_client_hello_context(message, false, true, true, Some(crate::Protocol::default()))
 }
 /// Parse the offered ALPN against the endpoint's immutable application protocol.
 pub fn parse_client_hello_early_for_protocol(
@@ -993,10 +1005,10 @@ fn parse_server_hello_context(message: &[u8], allow_psk: bool) -> Result<ServerH
 }
 
 pub fn parse_encrypted_extensions(message: &[u8]) -> Result<EncryptedExtensions<'_>, Error> {
-    parse_encrypted_extensions_context(message, false, crate::Protocol::Http09)
+    parse_encrypted_extensions_context(message, false, crate::Protocol::default())
 }
 pub fn parse_encrypted_extensions_early(message: &[u8]) -> Result<EncryptedExtensions<'_>, Error> {
-    parse_encrypted_extensions_context(message, true, crate::Protocol::Http09)
+    parse_encrypted_extensions_context(message, true, crate::Protocol::default())
 }
 pub fn parse_encrypted_extensions_early_for_protocol(
     message: &[u8],
@@ -2271,8 +2283,8 @@ mod tests {
         assert_eq!(
             &out[..n],
             &[
-                8, 0, 0, 26, 0, 24, 0, 16, 0, 13, 0, 11, 10, b'h', b'q', b'-', b'i', b'n', b't',
-                b'e', b'r', b'o', b'p', 0, 57, 0, 3, 15, 1, 7
+                8, 0, 0, 24, 0, 22, 0, 16, 0, 11, 0, 9, 8, b'h', b'i', b'b', b'a', b'n', b'a',
+                b'/', b'1', 0, 57, 0, 3, 15, 1, 7
             ]
         );
         assert_eq!(
@@ -2538,6 +2550,7 @@ mod tests {
         ));
     }
 
+    #[cfg(feature = "hq")]
     #[test]
     fn real_default_group_neqo_clienthello_can_retry_with_p256() {
         // Public local-test ClientHello reconstructed with complete CRYPTO byte
@@ -2589,7 +2602,7 @@ mod tests {
         for (b, pair) in first.iter_mut().zip(hex.chunks_exact(2)) {
             *b = nibble(pair[0]) * 16 + nibble(pair[1]);
         }
-        let hello = parse_client_hello(&first).unwrap();
+        let hello = parse_client_hello_early_for_protocol(&first, crate::Protocol::Http09).unwrap();
         assert!(hello.supports_p256);
         assert!(hello.key_share.is_empty());
         assert_eq!(hello.server_name, Some("localhost"));
@@ -2606,17 +2619,20 @@ mod tests {
         assert_eq!(retried.params, hello.params);
     }
 
+    #[cfg(feature = "hq")]
     #[test]
     fn real_neqo_p256_clienthello_ignores_grease_psk_modes() {
         let message = include_bytes!("../tests/vectors/tls/neqo-p256-grease-clienthello.bin");
-        let hello = parse_client_hello(message).unwrap();
+        let hello =
+            parse_client_hello_early_for_protocol(message, crate::Protocol::Http09).unwrap();
         assert_eq!(hello.server_name, Some("localhost"));
-        assert_eq!(hello.alpn, ALPN);
+        assert_eq!(hello.alpn, b"hq-interop");
         assert_eq!(hello.key_share.len(), 65);
         assert!(hello.offers_1301 && hello.offers_1303 && hello.signature_0403);
         assert!(!hello.params.is_empty());
     }
 
+    #[cfg(feature = "hq")]
     #[test]
     fn observed_neqo_retry_with_extra_grease_share_is_rejected() {
         // Exact public Initial CRYPTO messages; provenance and hashes are in
@@ -2626,9 +2642,15 @@ mod tests {
         // rule; RFC 8701 section 5 does not exempt GREASE from protocol rules.
         let first = include_bytes!("../tests/vectors/tls/neqo-hrr-observed-clienthello1.bin");
         let second = include_bytes!("../tests/vectors/tls/neqo-hrr-observed-clienthello2.bin");
-        let hello = parse_client_hello(first).unwrap();
+        let hello = parse_client_hello_early_for_protocol(first, crate::Protocol::Http09).unwrap();
         assert!(hello.supports_p256 && hello.key_share.is_empty());
-        assert_eq!(parse_client_hello(second).unwrap().key_share.len(), 65);
+        assert_eq!(
+            parse_client_hello_early_for_protocol(second, crate::Protocol::Http09)
+                .unwrap()
+                .key_share
+                .len(),
+            65
+        );
         let retry = HelloRetryRequest {
             suite: 0x1301,
             selected_group: Some(GROUP_P256),
@@ -3472,7 +3494,7 @@ mod early_tests {
                 .alpn,
             b"h3"
         );
-        assert!(parse_client_hello_early_for_protocol(&first[..n], Protocol::Http09).is_err());
+        assert!(parse_client_hello_early_for_protocol(&first[..n], Protocol::default()).is_err());
         let retry = HelloRetryRequest {
             suite: 0x1301,
             selected_group: None,
@@ -3496,7 +3518,7 @@ mod early_tests {
                 &first[..n],
                 &second[..m],
                 &retry,
-                Protocol::Http09
+                Protocol::default()
             )
             .is_err()
         );
@@ -3508,7 +3530,8 @@ mod early_tests {
             b"h3"
         );
         assert!(
-            parse_encrypted_extensions_early_for_protocol(&first[..n], Protocol::Http09).is_err()
+            parse_encrypted_extensions_early_for_protocol(&first[..n], Protocol::default())
+                .is_err()
         );
     }
     #[test]
@@ -3532,7 +3555,7 @@ mod early_tests {
                 .alpn,
             selected.alpn()
         );
-        for wrong in [other, Protocol::Http09, Protocol::Http3] {
+        for wrong in [other, Protocol::default(), Protocol::Http3] {
             assert!(parse_client_hello_early_for_protocol(&bytes[..n], wrong).is_err());
         }
         let retry = HelloRetryRequest {
@@ -3560,10 +3583,11 @@ mod early_tests {
                 .alpn,
             selected.alpn()
         );
-        for wrong in [other, Protocol::Http09, Protocol::Http3] {
+        for wrong in [other, Protocol::default(), Protocol::Http3] {
             assert!(parse_encrypted_extensions_early_for_protocol(&bytes[..n], wrong).is_err());
         }
     }
+    #[cfg(feature = "hq")]
     #[test]
     fn alpn_offer_selects_configured_protocol_not_first_known_name() {
         use crate::Protocol;

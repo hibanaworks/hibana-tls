@@ -9,7 +9,7 @@ use crate::{
 
 pub use crate::crypto::p256::SecretKey as SigningKey;
 pub use crate::wire::CipherPolicy;
-pub const ALPN: &[u8] = b"hq-interop";
+pub const ALPN: &[u8] = b"hibana/1";
 pub(super) const MAX_CHAIN: usize = certificate::MAX_INTERMEDIATES + 1;
 
 /// The four buffers must be distinct borrows. RX holds one complete handshake

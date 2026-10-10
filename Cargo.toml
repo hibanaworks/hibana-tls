@@ -12,6 +12,7 @@ hibana = { git = "https://github.com/hibanaworks/hibana", rev = "6ed1923c9447e48
 
 [features]
 default = []
+hq = []
 
 [dev-dependencies]
 hibana-quic = { path = "../hibana-quic" }

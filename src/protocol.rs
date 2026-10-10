@@ -1,21 +1,29 @@
 //! Immutable application protocol negotiated by the QUIC-specific TLS profile.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Protocol {
-    #[default]
+    #[cfg(feature = "hq")]
     Http09,
     Http3,
     /// Application-defined bytes on QUIC streams, without HTTP framing.
     Raw(RawProtocol),
 }
+impl Default for Protocol {
+    fn default() -> Self {
+        Self::Raw(RawProtocol(b"hibana/1"))
+    }
+}
 impl Protocol {
     pub const fn success_code(self) -> u64 {
         match self {
-            Self::Http09 | Self::Raw(_) => 0,
+            Self::Raw(_) => 0,
+            #[cfg(feature = "hq")]
+            Self::Http09 => 0,
             Self::Http3 => 0x100,
         }
     }
     pub const fn failure_code(self) -> u64 {
         match self {
+            #[cfg(feature = "hq")]
             Self::Http09 => 0x100,
             Self::Raw(_) => 1,
             Self::Http3 => 0x102,
@@ -26,12 +34,15 @@ impl Protocol {
     /// this classification never supplies missing response FINs or ACKs.
     pub const fn peer_application_close_is_clean(self, code: u64) -> bool {
         match self {
-            Self::Http09 | Self::Raw(_) => code == 0,
+            Self::Raw(_) => code == 0,
+            #[cfg(feature = "hq")]
+            Self::Http09 => code == 0,
             Self::Http3 => !matches!(code, 0x101..=0x110 | 0x200..=0x202),
         }
     }
     pub const fn alpn(self) -> &'static [u8] {
         match self {
+            #[cfg(feature = "hq")]
             Self::Http09 => b"hq-interop",
             Self::Http3 => b"h3",
             Self::Raw(protocol) => protocol.0,

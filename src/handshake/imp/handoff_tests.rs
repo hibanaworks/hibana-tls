@@ -139,7 +139,7 @@ fn actual_owned_tls_keys_and_finished_are_affine_scoped_and_allocation_free() {
             let cfinished = client.take_finished().unwrap();
             assert!(client.peer_transport_parameters().is_none());
             assert_eq!(cfinished.side(), Side::Client);
-            assert_eq!(cfinished.protocol(), crate::Protocol::Http09);
+            assert_eq!(cfinished.protocol(), crate::Protocol::default());
             assert_eq!(client.provider.negotiated_alpn(), None);
             assert!(core::ptr::eq(cfinished.scope(), client_key_scope));
             assert!(cfinished.authenticates_peer_parameters(SERVER_PARAMS));
@@ -173,7 +173,7 @@ fn actual_owned_tls_keys_and_finished_are_affine_scoped_and_allocation_free() {
                 .unwrap();
             let sfinished = finished.into_receipt();
             assert_eq!(sfinished.side(), Side::Server);
-            assert_eq!(sfinished.protocol(), crate::Protocol::Http09);
+            assert_eq!(sfinished.protocol(), crate::Protocol::default());
             assert!(sfinished.authenticates_peer_parameters(CLIENT_PARAMS));
             assert!(core::ptr::eq(sfinished.scope(), server_key_scope));
             assert!(!core::ptr::eq(sfinished.scope(), cfinished.scope()));

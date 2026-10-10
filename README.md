@@ -107,3 +107,12 @@ See [supported certificate profile](X509-PROFILE.md) and
 limited to the explicit volatile secret-memory boundary.
 
 Licensed under MIT OR Apache-2.0; see LICENSE-MIT and LICENSE-APACHE.
+
+## Application protocols
+
+`Protocol::Raw` and `Protocol::Http3` are available by default. The default
+protocol is raw QUIC with ALPN `hibana/1`. To negotiate the HTTP/0.9
+interoperability profile, enable the default-off `hq` Cargo feature and select
+`Protocol::Http09` explicitly. Enabling this feature keeps the library `no_std`
+and does not introduce an `alloc` dependency. QUIC exposes the corresponding
+feature through `hibana-quic/hq`.
