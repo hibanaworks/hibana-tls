@@ -14,7 +14,6 @@ pub mod wire;
 pub use protocol::{Protocol, RawProtocol};
 pub mod signature;
 
-pub mod quic;
 #[cfg(test)]
 extern crate std;
 pub mod certificate;
@@ -27,6 +26,6 @@ pub mod secret;
 
 pub mod key_exchange;
 
-pub mod endpoint;
+pub mod quic;
 
 pub mod handshake;

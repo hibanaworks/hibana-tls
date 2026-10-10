@@ -2,8 +2,8 @@
 //! Test wiring only: actual four projected roles and the production task set.
 //! No synchronous handshake replay or protocol-order dispatcher is used.
 use crate::{
-    endpoint::{Level, Provider},
-    handshake::{BoundedTls, global, local},
+    handshake::{BoundedTls, global, localside},
+    quic::{Level, Provider},
 };
 use core::{
     cell::RefCell,
@@ -26,8 +26,12 @@ struct Input<'a, 'b, 'cfg, 'buf, 'remote_cfg, 'remote_buf> {
     end: usize,
     level: Level,
 }
-impl local::MessageInput for Input<'_, '_, '_, '_, '_, '_> {
-    async fn read_message(&mut self, level: Level, out: &mut [u8]) -> Result<usize, local::Error> {
+impl crate::handshake::MessageInput for Input<'_, '_, '_, '_, '_, '_> {
+    async fn read_message(
+        &mut self,
+        level: Level,
+        out: &mut [u8],
+    ) -> Result<usize, crate::handshake::Error> {
         let mut copied = 0;
         let mut len = 4;
         while copied < len {
@@ -40,7 +44,7 @@ impl local::MessageInput for Input<'_, '_, '_, '_, '_, '_> {
                     {
                         Ok(Some(p)) => Poll::Ready(Ok(p)),
                         Ok(None) => Poll::Pending,
-                        Err(e) => Poll::Ready(Err(local::Error::Input(e))),
+                        Err(e) => Poll::Ready(Err(crate::handshake::Error::Input(e))),
                     }
                 })
                 .await?;
@@ -65,12 +69,12 @@ impl local::MessageInput for Input<'_, '_, '_, '_, '_, '_> {
                             &mut self.pending,
                             output.len,
                         )
-                        .map_err(local::Error::Input)?;
+                        .map_err(crate::handshake::Error::Input)?;
                     assert_eq!(
                         self.local
                             .borrow_mut()
                             .open(output.level, pn, b"fixture CRYPTO", &mut self.pending[..n])
-                            .map_err(local::Error::Input)?,
+                            .map_err(crate::handshake::Error::Input)?,
                         output.len
                     );
                 }
@@ -83,7 +87,7 @@ impl local::MessageInput for Input<'_, '_, '_, '_, '_, '_> {
             if copied == 4 {
                 len = 4 + ((out[1] as usize) << 16) + ((out[2] as usize) << 8) + out[3] as usize;
                 if len > out.len() {
-                    return Err(local::Error::Capacity);
+                    return Err(crate::handshake::Error::Capacity);
                 }
             }
         }
@@ -119,7 +123,7 @@ pub fn try_handshake_with<const MESSAGE: usize>(
     server: &mut BoundedTls<'_, '_>,
     fragment: usize,
     protect: bool,
-) -> Result<usize, local::Error> {
+) -> Result<usize, crate::handshake::Error> {
     try_handshake_observe::<MESSAGE>(client, server, fragment, protect, |_, _| {})
 }
 
@@ -129,7 +133,7 @@ fn try_handshake_observe<const MESSAGE: usize>(
     fragment: usize,
     protect: bool,
     mut observe: impl FnMut(&mut BoundedTls<'_, '_>, &mut BoundedTls<'_, '_>),
-) -> Result<usize, local::Error> {
+) -> Result<usize, crate::handshake::Error> {
     let c = RefCell::new(client);
     let s = RefCell::new(server);
     let mut ci = Input {
@@ -158,8 +162,8 @@ fn try_handshake_observe<const MESSAGE: usize>(
     };
     let mut cb = [0; MESSAGE];
     let mut sb = [0; MESSAGE];
-    let cs = local::MessageSlot::new(&mut cb);
-    let ss = local::MessageSlot::new(&mut sb);
+    let cs = crate::handshake::MessageSlot::new(&mut cb);
+    let ss = crate::handshake::MessageSlot::new(&mut sb);
     let cc = CarrierStorage::<1, 16, 4>::new();
     let sc = CarrierStorage::<1, 16, 4>::new();
     let mut cm = [0; 65536];
@@ -172,17 +176,29 @@ fn try_handshake_observe<const MESSAGE: usize>(
     let sid = SessionId::new(5201);
     let cr = ck.rendezvous(&mut cm, cc.bind(cid).unwrap()).unwrap();
     let sr = sk.rendezvous(&mut sm, sc.bind(sid).unwrap()).unwrap();
-    let cp = global::client_programs();
-    let sp = global::server_programs();
-    let mut cv = cr.enter(cid, &cp.verify).unwrap();
-    let mut cw = cr.enter(cid, &cp.input).unwrap();
-    let mut sv = sr.enter(sid, &sp.verify).unwrap();
-    let mut sw = sr.enter(sid, &sp.input).unwrap();
+    let cp = {
+        let graph = global::client();
+        (
+            hibana::runtime::program::project::<{ global::INPUT }, _>(&graph),
+            hibana::runtime::program::project::<{ global::VERIFY }, _>(&graph),
+        )
+    };
+    let sp = {
+        let graph = global::server();
+        (
+            hibana::runtime::program::project::<{ global::INPUT }, _>(&graph),
+            hibana::runtime::program::project::<{ global::VERIFY }, _>(&graph),
+        )
+    };
+    let mut cv = cr.enter(cid, &cp.1).unwrap();
+    let mut cw = cr.enter(cid, &cp.0).unwrap();
+    let mut sv = sr.enter(sid, &sp.1).unwrap();
+    let mut sw = sr.enter(sid, &sp.0).unwrap();
     {
-        let mut co = pin!(local::client_owner(&mut cv, &c, &cs));
-        let mut cin = pin!(local::client_input(&mut cw, &cs, &mut ci));
-        let mut so = pin!(local::server_owner(&mut sv, &s, &ss));
-        let mut sin = pin!(local::server_input(&mut sw, &ss, &mut si));
+        let mut co = pin!(localside::verify::client_owner(&mut cv, &c, &cs));
+        let mut cin = pin!(localside::input::client_input(&mut cw, &cs, &mut ci));
+        let mut so = pin!(localside::verify::server_owner(&mut sv, &s, &ss));
+        let mut sin = pin!(localside::input::server_input(&mut sw, &ss, &mut si));
         let mut tasks = pin!(TaskSet::new([
             co.as_mut(),
             cin.as_mut(),
@@ -208,21 +224,24 @@ fn try_handshake_observe<const MESSAGE: usize>(
 
 /// Deliver one adversarial ClientHello through the real server projection.
 /// The test expects rejection before another input message is requested.
-pub fn reject_server_message(server: &mut BoundedTls<'_, '_>, message: &[u8]) -> local::Error {
+pub fn reject_server_message(
+    server: &mut BoundedTls<'_, '_>,
+    message: &[u8],
+) -> crate::handshake::Error {
     probe_server_message(server, message, |_| None::<()>).expect_err("invalid ClientHello accepted")
 }
 pub fn probe_server_message<R>(
     server: &mut BoundedTls<'_, '_>,
     message: &[u8],
     mut observe: impl FnMut(&mut BoundedTls<'_, '_>) -> Option<R>,
-) -> Result<R, local::Error> {
+) -> Result<R, crate::handshake::Error> {
     struct One<'a>(&'a [u8], bool);
-    impl local::MessageInput for One<'_> {
+    impl crate::handshake::MessageInput for One<'_> {
         async fn read_message(
             &mut self,
             level: Level,
             out: &mut [u8],
-        ) -> Result<usize, local::Error> {
+        ) -> Result<usize, crate::handshake::Error> {
             if self.1 {
                 return core::future::pending().await;
             }
@@ -235,7 +254,7 @@ pub fn probe_server_message<R>(
     let source = RefCell::new(server);
     let mut input = One(message, false);
     let mut bytes = [0; 8192];
-    let slot = local::MessageSlot::new(&mut bytes);
+    let slot = crate::handshake::MessageSlot::new(&mut bytes);
     let carrier = CarrierStorage::<1, 16, 4>::new();
     let mut slab = [0; 65536];
     let mut storage = SessionKitStorage::uninit();
@@ -244,11 +263,21 @@ pub fn probe_server_message<R>(
     let rv = kit
         .rendezvous(&mut slab, carrier.bind(sid).unwrap())
         .unwrap();
-    let programs = global::server_programs();
-    let mut owner = rv.enter(sid, &programs.verify).unwrap();
-    let mut receiver = rv.enter(sid, &programs.input).unwrap();
-    let mut owner = pin!(local::server_owner(&mut owner, &source, &slot));
-    let mut receiver = pin!(local::server_input(&mut receiver, &slot, &mut input));
+    let projection = {
+        let graph = global::server();
+        (
+            hibana::runtime::program::project::<{ global::INPUT }, _>(&graph),
+            hibana::runtime::program::project::<{ global::VERIFY }, _>(&graph),
+        )
+    };
+    let mut owner = rv.enter(sid, &projection.1).unwrap();
+    let mut receiver = rv.enter(sid, &projection.0).unwrap();
+    let mut owner = pin!(localside::verify::server_owner(&mut owner, &source, &slot));
+    let mut receiver = pin!(localside::input::server_input(
+        &mut receiver,
+        &slot,
+        &mut input
+    ));
     let mut tasks = pin!(TaskSet::new([owner.as_mut(), receiver.as_mut()]));
     let mut cx = Context::from_waker(Waker::noop());
     for _ in 0..64 {
@@ -312,14 +341,14 @@ pub fn drain_authenticated_tickets(
 /// Actual projected transcript processing through pristine KeySource ownership.
 /// This component fixture transports CRYPTO plaintext, not QUIC packets.
 pub fn handshake_key_sources_observe<'client, 'server>(
-    client: &mut crate::handshake::local::keys::KeySource<'client, '_, '_>,
-    server: &mut crate::handshake::local::keys::KeySource<'server, '_, '_>,
+    client: &mut crate::handshake::keys::KeySource<'client, '_, '_>,
+    server: &mut crate::handshake::keys::KeySource<'server, '_, '_>,
     mut observe: impl FnMut(
-        &mut crate::handshake::local::keys::KeySource<'_, '_, '_>,
-        &mut crate::handshake::local::keys::KeySource<'_, '_, '_>,
+        &mut crate::handshake::keys::KeySource<'_, '_, '_>,
+        &mut crate::handshake::keys::KeySource<'_, '_, '_>,
     ),
 ) -> (Collected<'client>, Collected<'server>) {
-    use crate::handshake::local::keys::KeySource;
+    use crate::handshake::keys::KeySource;
     struct SourceInput<'a, 'scope, 'cfg, 'buf> {
         remote: &'a RefCell<&'a mut KeySource<'scope, 'cfg, 'buf>>,
         bytes: [u8; 8208],
@@ -327,12 +356,12 @@ pub fn handshake_key_sources_observe<'client, 'server>(
         end: usize,
         level: Level,
     }
-    impl local::MessageInput for SourceInput<'_, '_, '_, '_> {
+    impl crate::handshake::MessageInput for SourceInput<'_, '_, '_, '_> {
         async fn read_message(
             &mut self,
             level: Level,
             out: &mut [u8],
-        ) -> Result<usize, local::Error> {
+        ) -> Result<usize, crate::handshake::Error> {
             let mut copied = 0;
             let mut required = 4;
             while copied < required {
@@ -342,7 +371,7 @@ pub fn handshake_key_sources_observe<'client, 'server>(
                             |_| match self.remote.borrow_mut().transmit(&mut self.bytes) {
                                 Ok(Some(p)) => Poll::Ready(Ok(p)),
                                 Ok(None) => Poll::Pending,
-                                Err(e) => Poll::Ready(Err(local::Error::Input(e))),
+                                Err(e) => Poll::Ready(Err(crate::handshake::Error::Input(e))),
                             },
                         )
                         .await?;
@@ -351,7 +380,7 @@ pub fn handshake_key_sources_observe<'client, 'server>(
                     self.level = output.level;
                 }
                 if self.level != level {
-                    return Err(local::Error::Binding);
+                    return Err(crate::handshake::Error::Binding);
                 }
                 let n = (required - copied).min(self.end - self.pos);
                 out[copied..copied + n].copy_from_slice(&self.bytes[self.pos..self.pos + n]);
@@ -361,7 +390,7 @@ pub fn handshake_key_sources_observe<'client, 'server>(
                     required =
                         4 + ((out[1] as usize) << 16) + ((out[2] as usize) << 8) + out[3] as usize;
                     if required > out.len() {
-                        return Err(local::Error::Capacity);
+                        return Err(crate::handshake::Error::Capacity);
                     }
                 }
             }
@@ -386,8 +415,8 @@ pub fn handshake_key_sources_observe<'client, 'server>(
     };
     let mut cb = [0; 8192];
     let mut sb = [0; 8192];
-    let cs = local::MessageSlot::new(&mut cb);
-    let ss = local::MessageSlot::new(&mut sb);
+    let cs = crate::handshake::MessageSlot::new(&mut cb);
+    let ss = crate::handshake::MessageSlot::new(&mut sb);
     let cc = CarrierStorage::<1, 16, 4>::new();
     let sc = CarrierStorage::<1, 16, 4>::new();
     let mut cm = [0; 65536];
@@ -404,34 +433,60 @@ pub fn handshake_key_sources_observe<'client, 'server>(
         .init()
         .rendezvous(&mut sm, sc.bind(sid).unwrap())
         .unwrap();
-    let cp = crate::handshake::global::owned::programs();
-    let sp = crate::handshake::global::owned::programs();
-    let mut cv = cr.enter(cid, &cp.verify).unwrap();
-    let mut cw = cr.enter(cid, &cp.input).unwrap();
-    let mut sv = sr.enter(sid, &sp.verify).unwrap();
-    let mut sw = sr.enter(sid, &sp.input).unwrap();
-    let mut ch = cr.enter(cid, &cp.handoff).unwrap();
-    let mut sh = sr.enter(sid, &sp.handoff).unwrap();
-    let cmaterial = crate::handshake::local::keys::Handoff::<1024>::new();
-    let smaterial = crate::handshake::local::keys::Handoff::<1024>::new();
+    let cp = {
+        let graph = crate::handshake::global::owned::choreography();
+        (
+            hibana::runtime::program::project::<{ crate::handshake::global::owned::INPUT }, _>(
+                &graph,
+            ),
+            hibana::runtime::program::project::<{ crate::handshake::global::owned::VERIFY }, _>(
+                &graph,
+            ),
+            hibana::runtime::program::project::<{ crate::handshake::global::owned::HANDOFF }, _>(
+                &graph,
+            ),
+        )
+    };
+    let sp = {
+        let graph = crate::handshake::global::owned::choreography();
+        (
+            hibana::runtime::program::project::<{ crate::handshake::global::owned::INPUT }, _>(
+                &graph,
+            ),
+            hibana::runtime::program::project::<{ crate::handshake::global::owned::VERIFY }, _>(
+                &graph,
+            ),
+            hibana::runtime::program::project::<{ crate::handshake::global::owned::HANDOFF }, _>(
+                &graph,
+            ),
+        )
+    };
+    let mut cv = cr.enter(cid, &cp.1).unwrap();
+    let mut cw = cr.enter(cid, &cp.0).unwrap();
+    let mut sv = sr.enter(sid, &sp.1).unwrap();
+    let mut sw = sr.enter(sid, &sp.0).unwrap();
+    let mut ch = cr.enter(cid, &cp.2).unwrap();
+    let mut sh = sr.enter(sid, &sp.2).unwrap();
+    let cmaterial = crate::handshake::keys::Handoff::<1024>::new();
+    let smaterial = crate::handshake::keys::Handoff::<1024>::new();
     let mut cout = Collected::new();
     let mut sout = Collected::new();
     {
         let mut co = pin!(async {
             cv.send::<global::ClientStart>(&()).await?;
-            local::client_owned(&mut cv, &c, &cs, &cmaterial).await
+            localside::verify::client_owned(&mut cv, &c, &cs, &cmaterial).await
         });
         let mut so = pin!(async {
             sv.send::<global::ServerStart>(&()).await?;
-            local::server_owned(&mut sv, &s, &ss, &smaterial).await
+            localside::verify::server_owned(&mut sv, &s, &ss, &smaterial).await
         });
         let mut cin = pin!(async {
             cw.offer().await?.recv::<global::ClientStart>().await?;
-            local::client_input(&mut cw, &cs, &mut ci).await
+            localside::input::client_input(&mut cw, &cs, &mut ci).await
         });
         let mut sin = pin!(async {
             sw.offer().await?.recv::<global::ServerStart>().await?;
-            local::server_input(&mut sw, &ss, &mut si).await
+            localside::input::server_input(&mut sw, &ss, &mut si).await
         });
         let mut ct = pin!(collect(&mut ch, &cmaterial, &mut cout));
         let mut st = pin!(collect(&mut sh, &smaterial, &mut sout));
@@ -463,9 +518,9 @@ pub fn handshake_key_sources_observe<'client, 'server>(
 /// Actual affine material retained by the test's projected receiving local.
 /// No keys or Finished receipt are reconstructed from the source after handoff.
 pub struct Collected<'scope> {
-    pub handshake: Option<crate::handshake::local::keys::HandshakeKeyMaterial<'scope>>,
-    pub application: Option<crate::handshake::local::keys::ApplicationKeyMaterial<'scope>>,
-    pub finished: Option<crate::handshake::local::keys::Finished<'scope, 1024>>,
+    pub handshake: Option<crate::handshake::keys::HandshakeKeyMaterial<'scope>>,
+    pub application: Option<crate::handshake::keys::ApplicationKeyMaterial<'scope>>,
+    pub finished: Option<crate::handshake::keys::Finished<'scope, 1024>>,
 }
 impl Collected<'_> {
     fn new() -> Self {
@@ -478,15 +533,15 @@ impl Collected<'_> {
 }
 async fn collect<'scope>(
     endpoint: &mut hibana::Endpoint<'_, { crate::handshake::global::owned::HANDOFF }>,
-    material: &crate::handshake::local::keys::Handoff<'scope, 1024>,
+    material: &crate::handshake::keys::Handoff<'scope, 1024>,
     out: &mut Collected<'scope>,
-) -> Result<(), local::Error> {
+) -> Result<(), crate::handshake::Error> {
     use crate::handshake::global::owned as h;
     async fn take<'scope>(
         endpoint: &mut hibana::Endpoint<'_, { crate::handshake::global::owned::HANDOFF }>,
-        material: &crate::handshake::local::keys::Handoff<'scope, 1024>,
+        material: &crate::handshake::keys::Handoff<'scope, 1024>,
         out: &mut Collected<'scope>,
-    ) -> Result<(), local::Error> {
+    ) -> Result<(), crate::handshake::Error> {
         endpoint.recv::<h::KeysReady>().await?;
         if let Some(v) = material.take_handshake() {
             assert!(out.handshake.replace(v).is_none());
@@ -511,7 +566,7 @@ async fn collect<'scope>(
             route.recv::<h::ServerKeys>().await?;
             false
         }
-        _ => return Err(local::Error::Binding),
+        _ => return Err(crate::handshake::Error::Binding),
     };
     take(endpoint, material, out).await?;
     let route = endpoint.offer().await?;
@@ -521,7 +576,7 @@ async fn collect<'scope>(
             take(endpoint, material, out).await?;
         }
         243 => route.recv::<h::HelloKeys>().await?,
-        _ => return Err(local::Error::Binding),
+        _ => return Err(crate::handshake::Error::Binding),
     }
     if client {
         take(endpoint, material, out).await?;
@@ -533,7 +588,7 @@ async fn collect<'scope>(
                 take(endpoint, material, out).await?;
                 take(endpoint, material, out).await?;
             }
-            _ => return Err(local::Error::Binding),
+            _ => return Err(crate::handshake::Error::Binding),
         }
     }
     take(endpoint, material, out).await?;

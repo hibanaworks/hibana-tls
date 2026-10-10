@@ -2,7 +2,7 @@
 //! Fixed public widths and public signatures; no signing or secret-key operations.
 use super::{Error, SHA256_DIGEST_INFO};
 use crate::crypto::sha256::Sha256;
-use crate::secret::{Mask, FixedTimeEq};
+use crate::secret::{FixedTimeEq, Mask};
 
 fn width(n: usize) -> Result<(), Error> {
     if matches!(n, 256 | 384 | 512) {
@@ -44,7 +44,8 @@ pub(super) fn pss(digest: &[u8; 32], encoded: &mut [u8]) -> Result<(), Error> {
     for (counter, chunk) in db.chunks_mut(32).enumerate() {
         let mut hash = Sha256::new();
         hash.update(&h).map_err(|_| Error::InvalidSignature)?;
-        hash.update(&(counter as u32).to_be_bytes()).map_err(|_| Error::InvalidSignature)?;
+        hash.update(&(counter as u32).to_be_bytes())
+            .map_err(|_| Error::InvalidSignature)?;
         let mask = hash.finish();
         for (value, mask) in chunk.iter_mut().zip(mask.iter()) {
             *value ^= *mask;
@@ -58,9 +59,11 @@ pub(super) fn pss(digest: &[u8; 32], encoded: &mut [u8]) -> Result<(), Error> {
     }
     valid &= db[separator].fixed_time_eq(&1);
     let mut hash = Sha256::new();
-    hash.update(&[0u8; 8]).map_err(|_| Error::InvalidSignature)?;
+    hash.update(&[0u8; 8])
+        .map_err(|_| Error::InvalidSignature)?;
     hash.update(digest).map_err(|_| Error::InvalidSignature)?;
-    hash.update(&db[separator + 1..]).map_err(|_| Error::InvalidSignature)?;
+    hash.update(&db[separator + 1..])
+        .map_err(|_| Error::InvalidSignature)?;
     valid &= hash.finish()[..].fixed_time_eq(&h);
     if bool::from(valid) {
         Ok(())

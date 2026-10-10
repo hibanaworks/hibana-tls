@@ -13,8 +13,8 @@
 //! network trust-root lookup, or ring dependency is used by this module.
 
 use crate::x509::key_usage::{self, read as read_key_usage};
-use crate::x509::{verify, parsed, signature};
 pub use crate::x509::types::{CertificateDer, Der, ServerName, TrustAnchor, UnixTime};
+use crate::x509::{parsed, signature, verify};
 
 pub const ECDSA_SECP256R1_SHA256: u16 = 0x0403;
 pub const RSA_PSS_RSAE_SHA256: u16 = 0x0804;
@@ -148,7 +148,14 @@ impl<'a> ServerVerifier<'a> {
             *slot = intermediate.as_ref();
             check_key_usage(intermediate.as_ref(), RequiredUsage::Ca)?;
         }
-        let cert = verify::server_anchored(leaf.bytes(), &chain[..intermediates.len()], self.anchors, (*name).into(), self.time.as_secs()).map_err(Error::Certificate)?;
+        let cert = verify::server_anchored(
+            leaf.bytes(),
+            &chain[..intermediates.len()],
+            self.anchors,
+            (*name).into(),
+            self.time.as_secs(),
+        )
+        .map_err(Error::Certificate)?;
         Ok(ValidatedServerCertificate { cert })
     }
 }
@@ -169,8 +176,12 @@ impl ValidatedServerCertificate<'_> {
         transcript_hash: &[u8; 32],
         signature: &[u8],
     ) -> Result<(), Error> {
-        if !matches!(scheme, ECDSA_SECP256R1_SHA256 | RSA_PSS_RSAE_SHA256) { return Err(Error::UnsupportedSignatureScheme(scheme)); }
-        self.cert.certificate_verify(scheme,transcript_hash,signature).map_err(|_|Error::CertificateVerify)
+        if !matches!(scheme, ECDSA_SECP256R1_SHA256 | RSA_PSS_RSAE_SHA256) {
+            return Err(Error::UnsupportedSignatureScheme(scheme));
+        }
+        self.cert
+            .certificate_verify(scheme, transcript_hash, signature)
+            .map_err(|_| Error::CertificateVerify)
     }
 }
 
@@ -189,7 +200,10 @@ fn check_key_usage(certificate: &[u8], required: RequiredUsage) -> Result<(), Er
         // RFC8446 requires digitalSignature when KeyUsage is present.
         return Ok(());
     };
-    let bit = match required { RequiredUsage::Leaf => 0, RequiredUsage::Ca => 5 };
+    let bit = match required {
+        RequiredUsage::Leaf => 0,
+        RequiredUsage::Ca => 5,
+    };
     if usage & (1 << bit) == 0 {
         return Err(match required {
             RequiredUsage::Leaf => Error::MissingDigitalSignature,
@@ -198,7 +212,6 @@ fn check_key_usage(certificate: &[u8], required: RequiredUsage) -> Result<(), Er
     }
     Ok(())
 }
-
 
 /// Owned RFC 7468 credential decoding; no filesystem access.
 #[cfg(feature = "alloc")]
@@ -210,20 +223,108 @@ mod tests {
     #[test]
     fn owned_chain_checks_real_signatures_and_tls_certificate_verify() {
         use crate::x509::{name::Identity, verify};
-        let root=root(); let intermediate=intermediate(); let leaf=leaf();
-        let receipt=verify::server(&leaf,&[&intermediate],&[&root],Identity::Dns("localhost"),1800000000).unwrap();
-        receipt.certificate_verify(0x0403,&[0x42;32],&certificate_verify()).unwrap();
-        assert!(receipt.certificate_verify(0x0403,&[0x43;32],&certificate_verify()).is_err());
-        assert!(receipt.certificate_verify(0x0401,&[0x42;32],&certificate_verify()).is_err());
-        assert!(verify::server(&leaf,&[&intermediate],&[&root],Identity::Dns("elsewhere"),1800000000).is_err());
-        assert!(verify::server(&leaf,&[],&[&root],Identity::Dns("localhost"),1800000000).is_err());
-        assert!(verify::server(&leaf,&[&intermediate],&[&wrong_root()],Identity::Dns("localhost"),1800000000).is_err());
-        for time in [1700000000,2100000000] { assert!(verify::server(&leaf,&[&intermediate],&[&root],Identity::Dns("localhost"),time).is_err()); }
-        assert!(verify::server(&bad_key_usage(),&[&intermediate],&[&root],Identity::Dns("localhost"),1800000000).is_err());
-        assert!(verify::server(&bad_eku(),&[&intermediate],&[&root],Identity::Dns("localhost"),1800000000).is_err());
-        assert!(verify::server(&leaf,&[&bad_ca_usage()],&[&root],Identity::Dns("localhost"),1800000000).is_err());
-        let mut corrupt=leaf; let last=corrupt.len()-1; corrupt[last]^=1;
-        assert!(verify::server(&corrupt,&[&intermediate],&[&root],Identity::Dns("localhost"),1800000000).is_err());
+        let root = root();
+        let intermediate = intermediate();
+        let leaf = leaf();
+        let receipt = verify::server(
+            &leaf,
+            &[&intermediate],
+            &[&root],
+            Identity::Dns("localhost"),
+            1800000000,
+        )
+        .unwrap();
+        receipt
+            .certificate_verify(0x0403, &[0x42; 32], &certificate_verify())
+            .unwrap();
+        assert!(
+            receipt
+                .certificate_verify(0x0403, &[0x43; 32], &certificate_verify())
+                .is_err()
+        );
+        assert!(
+            receipt
+                .certificate_verify(0x0401, &[0x42; 32], &certificate_verify())
+                .is_err()
+        );
+        assert!(
+            verify::server(
+                &leaf,
+                &[&intermediate],
+                &[&root],
+                Identity::Dns("elsewhere"),
+                1800000000
+            )
+            .is_err()
+        );
+        assert!(
+            verify::server(&leaf, &[], &[&root], Identity::Dns("localhost"), 1800000000).is_err()
+        );
+        assert!(
+            verify::server(
+                &leaf,
+                &[&intermediate],
+                &[&wrong_root()],
+                Identity::Dns("localhost"),
+                1800000000
+            )
+            .is_err()
+        );
+        for time in [1700000000, 2100000000] {
+            assert!(
+                verify::server(
+                    &leaf,
+                    &[&intermediate],
+                    &[&root],
+                    Identity::Dns("localhost"),
+                    time
+                )
+                .is_err()
+            );
+        }
+        assert!(
+            verify::server(
+                &bad_key_usage(),
+                &[&intermediate],
+                &[&root],
+                Identity::Dns("localhost"),
+                1800000000
+            )
+            .is_err()
+        );
+        assert!(
+            verify::server(
+                &bad_eku(),
+                &[&intermediate],
+                &[&root],
+                Identity::Dns("localhost"),
+                1800000000
+            )
+            .is_err()
+        );
+        assert!(
+            verify::server(
+                &leaf,
+                &[&bad_ca_usage()],
+                &[&root],
+                Identity::Dns("localhost"),
+                1800000000
+            )
+            .is_err()
+        );
+        let mut corrupt = leaf;
+        let last = corrupt.len() - 1;
+        corrupt[last] ^= 1;
+        assert!(
+            verify::server(
+                &corrupt,
+                &[&intermediate],
+                &[&root],
+                Identity::Dns("localhost"),
+                1800000000
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -235,7 +336,10 @@ mod tests {
             assert_eq!(parsed.public_key.len(), 65);
             assert_eq!(parsed.signed[0], 0x30);
             for end in 0..fixture.len() {
-                assert!(crate::x509::parsed::parse(&fixture[..end]).is_err(), "prefix {end}");
+                assert!(
+                    crate::x509::parsed::parse(&fixture[..end]).is_err(),
+                    "prefix {end}"
+                );
             }
             let mut trailing = std::vec::Vec::from(fixture);
             trailing.push(0);
@@ -562,9 +666,7 @@ mod tests {
                 VALID_TIME,
                 None
             ),
-            Err(Error::Certificate(
-                verify::Error::Usage
-            ))
+            Err(Error::Certificate(verify::Error::Usage))
         ));
         assert_eq!(
             trust_anchor_from_der(&CertificateDer::from(bad_ca_usage().as_slice())).err(),
@@ -671,9 +773,24 @@ mod tests {
 
 /// Local key/certificate consistency only; not chain or peer authentication.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum SigningKeyError { InvalidConfig, Mismatch }
-pub fn verify_signing_key(leaf_der: &[u8], key: &crate::crypto::p256::SecretKey) -> Result<(), SigningKeyError> {
+pub enum SigningKeyError {
+    InvalidConfig,
+    Mismatch,
+}
+pub fn verify_signing_key(
+    leaf_der: &[u8],
+    key: &crate::crypto::p256::SecretKey,
+) -> Result<(), SigningKeyError> {
     let cert = parsed::parse(leaf_der).map_err(|_| SigningKeyError::InvalidConfig)?;
-    let signed = key.sign(b"hibana-quic TLS signing key consistency").map_err(|_| SigningKeyError::InvalidConfig)?;
-    signature::verify(cert.public_key_algorithm,cert.public_key,signature::ECDSA_SHA256,b"hibana-quic TLS signing key consistency",signed.to_der().as_bytes()).map_err(|_| SigningKeyError::Mismatch)
+    let signed = key
+        .sign(b"hibana-quic TLS signing key consistency")
+        .map_err(|_| SigningKeyError::InvalidConfig)?;
+    signature::verify(
+        cert.public_key_algorithm,
+        cert.public_key,
+        signature::ECDSA_SHA256,
+        b"hibana-quic TLS signing key consistency",
+        signed.to_der().as_bytes(),
+    )
+    .map_err(|_| SigningKeyError::Mismatch)
 }

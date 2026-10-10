@@ -22,11 +22,8 @@ pub use crate::handshake::global::Retry;
 pub use crate::handshake::global::RetryHello;
 pub use crate::handshake::global::ServerStart;
 pub use crate::handshake::global::VERIFY;
+use hibana::g;
 use hibana::runtime::program::Projectable;
-use hibana::{
-    g,
-    runtime::program::{RoleProgram, project},
-};
 // The existing QUIC composition uses roles 0..32. This is its independent
 // material consumer; no existing endpoint is aliased or driven twice.
 pub const HANDOFF: u8 = 33;
@@ -122,17 +119,4 @@ pub fn choreography() -> impl Projectable {
             g::seq(g::send::<VERIFY, HANDOFF, ServerKeys>(), server()),
         ),
     )
-}
-pub struct Programs {
-    pub input: RoleProgram<INPUT>,
-    pub verify: RoleProgram<VERIFY>,
-    pub handoff: RoleProgram<HANDOFF>,
-}
-pub fn programs() -> Programs {
-    let graph = choreography();
-    Programs {
-        input: project(&graph),
-        verify: project(&graph),
-        handoff: project(&graph),
-    }
 }

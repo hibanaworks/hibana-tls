@@ -116,6 +116,21 @@ impl core::fmt::Debug for FailureDiagnostic {
 /// Owned by one endpoint. Its allocation policy is part of the release identity:
 /// implementing this trait does not establish no_alloc. The host reference backend
 /// explicitly allocates. A release backend must use caller-owned bounded storage.
+/// Key updates and handshake confirmation belong to the QUIC key owners.
+///
+/// ```compile_fail
+/// use hibana_tls::quic::Provider;
+/// fn confirm(provider: &mut impl Provider) {
+///     provider.confirm_handshake().unwrap();
+/// }
+/// ```
+///
+/// ```compile_fail
+/// use hibana_tls::quic::Provider;
+/// fn update(provider: &mut impl Provider) {
+///     provider.initiate_key_update(0, 1000).unwrap();
+/// }
+/// ```
 pub trait Provider {
     fn observations(&self) -> Observations {
         Observations::default()
@@ -190,12 +205,8 @@ pub trait Provider {
     /// First returned mask byte needs only low five bits; header form determines
     /// whether the caller applies four or five. Remaining bytes mask PN bytes.
     fn header_mask(&self, level: Level, local: bool, sample: &[u8; 16]) -> Result<[u8; 5], Error>;
-    /// Backends without update support retain generation zero and reject phase changes.
     fn negotiated_group(&self) -> Option<u16> {
         None
-    }
-    fn key_phase(&self) -> bool {
-        false
     }
     /// Bounded backends expose the same non-resettable integrity budget used by
     /// Handshake and every application generation, so Initial protection shares
@@ -203,51 +214,6 @@ pub trait Provider {
     /// return None and must not claim this bounded-backend property.
     fn integrity_budget(&mut self) -> Option<&mut crate::quic::packet_protection::IntegrityBudget> {
         None
-    }
-    fn receive_key_generation(&self) -> u64 {
-        0
-    }
-    fn key_generation(&self) -> u64 {
-        0
-    }
-    fn confirm_handshake(&mut self) -> Result<(), Error> {
-        Ok(())
-    }
-    fn maintain_keys(&mut self, _now: u64, _pto: u64) -> Result<(), Error> {
-        Ok(())
-    }
-    fn initiate_key_update(&mut self, _now: u64, _pto: u64) -> Result<(), Error> {
-        Err(Error::Unsupported)
-    }
-    /// Caller has already validated authenticated ACK ranges against actual sent history.
-    fn acknowledge_one_rtt(
-        &mut self,
-        _sent_pn: u64,
-        _received_generation: u64,
-        _now: u64,
-        _pto: u64,
-    ) -> Result<(), Error> {
-        Ok(())
-    }
-    fn open_one_rtt(
-        &mut self,
-        pn: u64,
-        phase: bool,
-        header: &[u8],
-        buffer: &mut [u8],
-        _now: u64,
-        _pto: u64,
-    ) -> Result<crate::quic::packet_protection::Opened, Error> {
-        if phase {
-            return Err(Error::Authentication);
-        }
-        self.open(Level::OneRtt, pn, header, buffer).map(|len| {
-            crate::quic::packet_protection::Opened {
-                len,
-                generation: 0,
-                key_updated: false,
-            }
-        })
     }
 }
 

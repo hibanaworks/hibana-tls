@@ -14,10 +14,10 @@ mod tests;
 mod owned_level_tests;
 
 use super::super::{BoundedTls, Failure};
-use crate::handshake::imp::DirectionalKeys;
+use crate::handshake::imp::material::DirectionalKeys;
 use crate::{
     early::{EarlyStatus, RememberedLimits, ReplayClaim},
-    endpoint::{self as tls, Level, Output, Provider},
+    quic::{self as tls, Level, Output, Provider},
     quic::{
         packet_protection::{self as crypto, CipherSuite, IntegrityBudget, KeyKind, PacketKey},
         scope::{ApplicationKeyInstallation, ApplicationKeyScope},
@@ -30,7 +30,7 @@ use crate::{
 /// The immutable scope is bound before Handshake/application keys are created.
 ///
 /// ```compile_fail
-/// use hibana_tls::{handshake::local::keys::KeySource, endpoint::Provider};
+/// use hibana_tls::{handshake::keys::KeySource, quic::Provider};
 /// fn combined(source: KeySource<'_, '_, '_>) {
 ///     let _: &dyn Provider = &source;
 /// }
@@ -109,7 +109,7 @@ impl<'scope, 'cfg, 'buf> KeySource<'scope, 'cfg, 'buf> {
     /// After Finished, OneRtt-only ticket input borrows the actual RX receipt.
     /// A caller cannot substitute the source's historical completion state.
     /// ```compile_fail
-    /// use hibana_tls::{endpoint::Level, handshake::local::keys::KeySource};
+    /// use hibana_tls::{quic::Level, handshake::keys::KeySource};
     /// fn unproven(source: &mut KeySource<'_, '_, '_>) {
     ///     source.receive(Level::OneRtt, &[4, 0, 0, 0]);
     /// }
@@ -147,7 +147,7 @@ impl<'scope, 'cfg, 'buf> KeySource<'scope, 'cfg, 'buf> {
     /// Bind the actual burned replay claim and remembered limits to this source.
     pub fn take_early_admission(
         &mut self,
-    ) -> Result<crate::handshake::local::keys::Admission<'scope>, tls::Error> {
+    ) -> Result<crate::handshake::keys::Admission<'scope>, tls::Error> {
         if self.provider.side() != Side::Server {
             return Err(tls::Error::InvalidInput);
         }
@@ -159,7 +159,7 @@ impl<'scope, 'cfg, 'buf> KeySource<'scope, 'cfg, 'buf> {
             .provider
             .take_early_replay_claim()
             .ok_or(tls::Error::KeysUnavailable)?;
-        Ok(crate::handshake::local::keys::Admission::new(
+        Ok(crate::handshake::keys::Admission::new(
             self.scope, limits, claim,
         ))
     }
@@ -263,7 +263,7 @@ impl<'scope, 'cfg, 'buf> KeySource<'scope, 'cfg, 'buf> {
 /// observations cannot substitute for it in peer-parameter or early release
 /// transitions. Its local side determines whether QUIC confirmation also exists.
 /// ```compile_fail
-/// use hibana_tls::handshake::local::keys::FinishedAuthenticated;
+/// use hibana_tls::handshake::keys::FinishedAuthenticated;
 /// fn duplicate(done: FinishedAuthenticated<'_>) { let a = done; let b = done; }
 /// ```
 #[derive(Debug)]
@@ -318,7 +318,7 @@ pub(in crate::handshake) fn peer_parameters_digest(parameters: &[u8]) -> [u8; 32
 
 /// Affine Handshake installation. Neither direction can borrow the other's key.
 /// ```compile_fail
-/// use hibana_tls::handshake::local::keys::HandshakeKeyMaterial;
+/// use hibana_tls::handshake::keys::HandshakeKeyMaterial;
 /// fn duplicate(keys: HandshakeKeyMaterial<'_>) { let a = keys; let b = keys; }
 /// ```
 #[must_use = "dropping key material permanently discards its installation"]
@@ -347,7 +347,7 @@ impl<'scope> HandshakeKeyMaterial<'scope> {
 /// Fresh application material carrying the original pre-key installation claim.
 /// No API exposes a combined legacy ApplicationKeys or accepts another scope.
 /// ```compile_fail
-/// use hibana_tls::handshake::local::keys::ApplicationKeyMaterial;
+/// use hibana_tls::handshake::keys::ApplicationKeyMaterial;
 /// fn duplicate(keys: ApplicationKeyMaterial<'_>) { let a = keys; let b = keys; }
 /// ```
 #[must_use = "dropping key material permanently discards its installation"]
@@ -377,14 +377,14 @@ pub enum EarlyKeyMaterial<'scope> {
 /// does not grant Finished, early delivery, or application-update authority.
 ///
 /// ```compile_fail
-/// use hibana_tls::handshake::local::keys::AuthenticatedLevelRead;
+/// use hibana_tls::handshake::keys::AuthenticatedLevelRead;
 /// fn duplicate(receipt: AuthenticatedLevelRead<'_>) {
 ///     let first = receipt;
 ///     let second = receipt;
 /// }
 /// ```
 /// ```compile_fail
-/// use hibana_quic::{tls::handshake::local::keys::AuthenticatedLevelRead,
+/// use hibana_quic::{tls::handshake::keys::AuthenticatedLevelRead,
 ///     crypto::{KeyKind, directional::ApplicationKeyScope}};
 /// fn forge(scope: &ApplicationKeyScope) {
 ///     let _ = AuthenticatedLevelRead {

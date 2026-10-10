@@ -92,4 +92,3 @@ pub enum EncryptionLevel {
     ZeroRtt,
     OneRtt,
 }
-

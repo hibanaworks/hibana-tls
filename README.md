@@ -14,8 +14,8 @@ cryptographic security proof.
 ## Start here
 
 - [handshake/global.rs](src/handshake/global.rs): legal transcript order.
-- [handshake/local/](src/handshake/local/mod.rs): the actual projected TLS roles.
-- [handshake/local/keys.rs](src/handshake/local/keys.rs): owned keys and
+- [handshake/localside/](src/handshake/localside/mod.rs): the actual projected TLS roles.
+- [handshake/imp/keys.rs](src/handshake/imp/keys.rs): owned keys and
   authenticated Finished receipts passed to QUIC.
 - [handshake/imp/](src/handshake/imp/mod.rs): transcript and cryptographic operations
   used by those roles.
@@ -28,7 +28,7 @@ should use the QUIC connection entry to compose TLS and packet ownership.
 
 Read [global.rs](src/handshake/global.rs), then its
 [owned-key composition](src/handshake/global/owned.rs), then
-[`client_owned` / `server_owned`](src/handshake/local/mod.rs).
+[`client_owned` / `server_owned`](src/handshake/localside/verify.rs).
 The globals describe Hello, certificate verification, Finished and key-handoff
 order. Each choreography function returns `impl Projectable`; Rust infers its
 step-list from the `g::send`, `g::seq`, `g::route`, and `g::par` expressions.
@@ -37,7 +37,7 @@ then projects the combined choreography for each role. The localsides execute
 that order directly through projected endpoints.
 
 A typical handoff publishes actual key material into
-[`Handoff`](src/handshake/local/keys.rs), sends `KeysReady`, receives `KeysTaken`,
+[`Handoff`](src/handshake/imp/keys.rs), sends `KeysReady`, receives `KeysTaken`,
 and checks that the handoff is empty before sending `Applied`. The next
 transcript step cannot use that branch's completion signal while the previous
 key material remains unconsumed. QUIC checks the associated connection scope
@@ -51,21 +51,21 @@ Pure primitives live in [crypto/](src/crypto), certificate-chain/name checks in
 
 ## Find the actual endpoint owners
 
-The handshake entry module declares `global`, `local` and the private calculation
+The handshake entry module declares `global`, `localside` and the private calculation
 parts. It exports configuration, caller-owned storage and TLS material without
 adding a dispatch object. The material's methods calculate or validate bytes;
-`local` chooses their order by executing projected endpoint operations.
+`localside` chooses their order by executing projected endpoint operations.
 
-- INPUT is `client_input` or `server_input` in [local](src/handshake/local/mod.rs).
+- INPUT is `client_input` or `server_input` in [localside/input.rs](src/handshake/localside/input.rs).
   It owns reassembly input and lends one complete message through `MessageSlot`.
-- VERIFY is `client_owned` or `server_owned` in the same module. Its exclusive
+- VERIFY is `client_owned` or `server_owned` in [localside/verify.rs](src/handshake/localside/verify.rs). Its exclusive
   endpoint and TLS material govern transcript checks and Finished authentication.
 - HANDOFF appears in [global/owned](src/handshake/global/owned.rs).
-  [local/keys](src/handshake/local/keys.rs) transfers real key material and
+  [Key and handoff storage](src/handshake/imp/keys.rs) holds real key material and
   authenticated Finished receipts, which QUIC consumes before continuing.
 - QUIC composes and projects this graph with packet receive/transmit and timers.
-  Its [handshake endpoint set](https://github.com/hibanaworks/hibana-quic/blob/ci/parallel-client-retirement/src/quic/local/mod.rs)
-  attaches those programs; its [handshake execution](https://github.com/hibanaworks/hibana-quic/blob/ci/parallel-client-retirement/src/quic/local/run.rs)
+  Its [handshake endpoint set](https://github.com/hibanaworks/hibana-quic/blob/ci/parallel-client-retirement/src/quic/localside/mod.rs)
+  projects each role and attaches its Endpoint; its [handshake execution](https://github.com/hibanaworks/hibana-quic/blob/ci/parallel-client-retirement/src/quic/localside/run.rs)
   owns the actual concurrent futures. TLS does not spawn a hidden executor.
 
 Pure crypto, certificate and wire modules have no message choreography to invent.

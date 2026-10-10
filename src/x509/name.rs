@@ -134,9 +134,15 @@ mod tests {
     fn invalid_presented_dns_cannot_authenticate_or_invalidate_another_identity() {
         let bytes = b"\x30\x12\x82\x09localhost\x82\x05a..co";
         assert_eq!(matches_san(bytes, Identity::Dns("localhost")), Ok(true));
-        assert_eq!(matches_san(bytes, Identity::Dns("other.example")), Ok(false));
+        assert_eq!(
+            matches_san(bytes, Identity::Dns("other.example")),
+            Ok(false)
+        );
         let invalid_only = b"\x30\x07\x82\x05a..co";
-        assert_eq!(matches_san(invalid_only, Identity::Dns("localhost")), Ok(false));
+        assert_eq!(
+            matches_san(invalid_only, Identity::Dns("localhost")),
+            Ok(false)
+        );
     }
     #[test]
     fn truncated_der_after_a_matching_name_still_rejects() {
@@ -150,6 +156,9 @@ mod tests {
         bytes[4..14].copy_from_slice(b"\x82\x08server42");
         bytes[14..17].copy_from_slice(&[0x82, 0x81, 250]);
         assert_eq!(matches_san(&bytes, Identity::Dns("server42")), Ok(true));
-        assert_eq!(matches_san(&bytes, Identity::Dns("other.example")), Ok(false));
+        assert_eq!(
+            matches_san(&bytes, Identity::Dns("other.example")),
+            Ok(false)
+        );
     }
 }

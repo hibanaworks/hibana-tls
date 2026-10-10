@@ -1,11 +1,11 @@
 // Owned-key authority checks driven by actual asynchronous transcript roles.
 use super::*;
+use crate::handshake::test_fixture as fixture;
 use crate::{
     certificate::{CertificateDer, Limits, trust_anchor_from_der},
     handshake::{CipherPolicy, ClientConfig, ServerConfig},
 };
 use actor_test_allocator::NoAlloc;
-use crate::handshake::test_fixture as fixture;
 use fixture::{Buffers, CLIENT_PARAMS, SERVER_PARAMS, TestRandom};
 
 use crate::handshake::async_test_fixture as async_fixture;
@@ -14,7 +14,7 @@ fn handshake(source: &mut KeySource<'_, '_, '_>, target: &mut KeySource<'_, '_, 
     assert!(source.peer_transport_parameters().is_some());
     assert!(target.peer_transport_parameters().is_some());
 }
-fn legacy_denied(provider: &mut BoundedTls<'_, '_>) {
+fn transferred_keys_are_unavailable(provider: &mut BoundedTls<'_, '_>) {
     let mut buffer = [0; 32];
     for level in [Level::Handshake, Level::OneRtt] {
         assert!(!provider.has_keys(level));
@@ -32,20 +32,6 @@ fn legacy_denied(provider: &mut BoundedTls<'_, '_>) {
         );
     }
     assert!(provider.integrity_budget().is_none());
-    assert_eq!(provider.confirm_handshake(), Err(tls::Error::Unsupported));
-    assert_eq!(provider.maintain_keys(0, 10), Err(tls::Error::Unsupported));
-    assert_eq!(
-        provider.initiate_key_update(0, 10),
-        Err(tls::Error::Unsupported)
-    );
-    assert_eq!(
-        provider.acknowledge_one_rtt(1, 0, 0, 10),
-        Err(tls::Error::Unsupported)
-    );
-    assert_eq!(
-        provider.open_one_rtt(1, false, b"h", &mut buffer, 0, 10),
-        Err(tls::Error::KeysUnavailable)
-    );
     assert!(!provider.has_early_keys());
     assert_eq!(
         provider.seal_early(1, b"h", &mut buffer, 4),
@@ -126,7 +112,7 @@ fn actual_owned_tls_keys_and_finished_are_affine_scoped_and_allocation_free() {
             assert!(client.take_application_keys().is_err());
             assert!(client.take_finished().is_err());
             assert!(client.peer_transport_parameters().is_none());
-            legacy_denied(&mut client.provider);
+            transferred_keys_are_unavailable(&mut client.provider);
             handshake(&mut client, &mut server);
             assert_eq!(server.peer_transport_parameters(), Some(CLIENT_PARAMS));
             let (shs_rx, mut shs_tx) = server.take_handshake_keys().unwrap().install();
@@ -140,7 +126,7 @@ fn actual_owned_tls_keys_and_finished_are_affine_scoped_and_allocation_free() {
             assert!(server.provider.install_application().is_err());
             assert!(server.provider.packet_keys(KeyKind::Handshake).is_err());
             assert!(server.provider.packet_keys(KeyKind::OneRtt).is_err());
-            legacy_denied(&mut server.provider);
+            transferred_keys_are_unavailable(&mut server.provider);
             // QUIC confirmation/ACK/update-policy checks stay with the actual
             // QUIC directional owner tests, using real TLS handoff material.
 
@@ -180,7 +166,7 @@ fn actual_owned_tls_keys_and_finished_are_affine_scoped_and_allocation_free() {
             // receipt; a later adequate buffer receives that exact ownership.
             assert!(matches!(
                 server_transcript.take_finished_with_parameters::<0>(),
-                Err(crate::endpoint::Error::Capacity)
+                Err(crate::quic::Error::Capacity)
             ));
             let finished = server_transcript
                 .take_finished_with_parameters::<512>()
@@ -201,7 +187,7 @@ fn actual_owned_tls_keys_and_finished_are_affine_scoped_and_allocation_free() {
 
             assert!(matches!(
                 server_transcript.take_finished_with_parameters::<512>(),
-                Err(crate::endpoint::Error::KeysUnavailable)
+                Err(crate::quic::Error::KeysUnavailable)
             ));
             assert_eq!(
                 client.negotiated_group(),
@@ -222,7 +208,7 @@ fn actual_owned_tls_keys_and_finished_are_affine_scoped_and_allocation_free() {
                 // The separate QUIC test retains both pre/post-send refusal
                 // assertions with the real directional authority types.
             }
-            legacy_denied(&mut client.provider);
+            transferred_keys_are_unavailable(&mut client.provider);
             assert!(client.provider.install_application().is_err());
             // The source cannot use a historical Connected bit after lending
             // the actual Finished authority to RX.

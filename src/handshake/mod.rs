@@ -13,12 +13,12 @@
 
 pub mod global;
 mod imp;
-pub mod local;
+pub mod localside;
 
-use imp::Mode;
-pub use imp::{
-    ALPN, BoundedTls, CipherPolicy, ClientConfig, ClientEarlyData, ClientResumption, Failure,
-    ServerConfig, ServerEarlyData, ServerResumption, SigningKey, Storage,
+use imp::config::Mode;
+pub use imp::config::{
+    ALPN, CipherPolicy, ClientConfig, ClientEarlyData, ClientResumption, Failure, ServerConfig,
+    ServerEarlyData, ServerResumption, SigningKey, Storage,
 };
 
 #[cfg(test)]
@@ -28,3 +28,38 @@ pub(crate) mod async_test_fixture;
 #[cfg(test)]
 #[path = "../../tests/support/tls_actor_fixture.rs"]
 pub(crate) mod test_fixture;
+
+pub use imp::{buffer::MessageSlot, keys};
+
+/// A CRYPTO-stream adapter must return exactly one complete TLS message at the
+/// requested level, including its four-byte handshake header. It must retain
+/// following messages for later calls and reject wrong-level input.
+pub trait MessageInput {
+    fn read_message(
+        &mut self,
+        level: crate::quic::Level,
+        bytes: &mut [u8],
+    ) -> impl core::future::Future<Output = Result<usize, Error>>;
+}
+
+pub use imp::material::BoundedTls;
+
+use hibana::EndpointError;
+#[derive(Debug)]
+pub enum Error {
+    Endpoint(EndpointError),
+    Crypto(Failure),
+    Binding,
+    Capacity,
+    Input(crate::quic::Error),
+}
+impl From<EndpointError> for Error {
+    fn from(e: EndpointError) -> Self {
+        Self::Endpoint(e)
+    }
+}
+impl From<Failure> for Error {
+    fn from(e: Failure) -> Self {
+        Self::Crypto(e)
+    }
+}

@@ -7,15 +7,12 @@
 //! selection; Finished remains mandatory. The connection embeds this graph as its
 //! live receive/transcript path.
 //!
-//! INPUT executes `local::client_input` / `local::server_input`; VERIFY executes
-//! `local::client_owned` / `local::server_owned` when QUIC composes the owned-key
+//! INPUT executes `localside::input::client_input` / `localside::input::server_input`; VERIFY executes
+//! `localside::verify::client_owned` / `localside::verify::server_owned` when QUIC composes the owned-key
 //! graph. The enclosing connection attaches and polls those real endpoints.
 //! See [`crate::handshake::local`] and [`crate::handshake::global::owned`].
+use hibana::g;
 use hibana::runtime::program::Projectable;
-use hibana::{
-    g,
-    runtime::program::{RoleProgram, project},
-};
 
 pub const INPUT: u8 = 0;
 pub const VERIFY: u8 = 1;
@@ -92,25 +89,6 @@ pub fn server() -> impl Projectable {
         ),
     )
 }
-pub struct Programs {
-    pub input: RoleProgram<INPUT>,
-    pub verify: RoleProgram<VERIFY>,
-}
-pub fn client_programs() -> Programs {
-    let global = client();
-    Programs {
-        input: project(&global),
-        verify: project(&global),
-    }
-}
-pub fn server_programs() -> Programs {
-    let global = server();
-    Programs {
-        input: project(&global),
-        verify: project(&global),
-    }
-}
-
 pub type ClientStart = g::Msg<198, ()>;
 pub type ServerStart = g::Msg<199, ()>;
 pub fn choreography() -> impl Projectable {
