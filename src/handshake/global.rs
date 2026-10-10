@@ -6,6 +6,11 @@
 //! handshakes omit Certificate/CertificateVerify only after negotiated PSK
 //! selection; Finished remains mandatory. The connection embeds this graph as its
 //! live receive/transcript path.
+//!
+//! INPUT executes `local::client_input` / `local::server_input`; VERIFY executes
+//! `local::client_owned` / `local::server_owned` when QUIC composes the owned-key
+//! graph. The enclosing connection attaches and polls those real endpoints.
+//! See [`crate::handshake::local`] and [`crate::handshake::global::owned`].
 use hibana::runtime::program::Projectable;
 use hibana::{
     g,

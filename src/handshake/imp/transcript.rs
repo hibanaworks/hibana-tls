@@ -1,5 +1,5 @@
 //! Single-message transcript and cryptographic operations selected by the locals.
-use super::super::*;
+use super::*;
 
 impl BoundedTls<'_, '_> {
     pub(in crate::handshake) fn client_hello(

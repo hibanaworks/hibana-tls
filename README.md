@@ -43,10 +43,33 @@ transcript step cannot use that branch's completion signal while the previous
 key material remains unconsumed. QUIC checks the associated connection scope
 when it installs the resulting keys and Finished receipts.
 
+[imp/](src/handshake/imp/mod.rs) owns the bounded TLS material, and
 [imp/transcript.rs](src/handshake/imp/transcript.rs) performs transcript and
 cryptographic operations. It does not choose the next projected endpoint step.
 Pure primitives live in [crypto/](src/crypto), certificate-chain/name checks in
 [x509/](src/x509), and the explicit erasure boundary in [secret/](src/secret).
+
+## Find the actual endpoint owners
+
+The handshake entry module declares `global`, `local` and the private calculation
+parts. It exports configuration, caller-owned storage and TLS material without
+adding a dispatch object. The material's methods calculate or validate bytes;
+`local` chooses their order by executing projected endpoint operations.
+
+- INPUT is `client_input` or `server_input` in [local](src/handshake/local/mod.rs).
+  It owns reassembly input and lends one complete message through `MessageSlot`.
+- VERIFY is `client_owned` or `server_owned` in the same module. Its exclusive
+  endpoint and TLS material govern transcript checks and Finished authentication.
+- HANDOFF appears in [global/owned](src/handshake/global/owned.rs).
+  [local/keys](src/handshake/local/keys.rs) transfers real key material and
+  authenticated Finished receipts, which QUIC consumes before continuing.
+- QUIC composes and projects this graph with packet receive/transmit and timers.
+  Its [handshake endpoint set](https://github.com/hibanaworks/hibana-quic/blob/ci/parallel-client-retirement/src/quic/local/mod.rs)
+  attaches those programs; its [handshake execution](https://github.com/hibanaworks/hibana-quic/blob/ci/parallel-client-retirement/src/quic/local/run.rs)
+  owns the actual concurrent futures. TLS does not spawn a hidden executor.
+
+Pure crypto, certificate and wire modules have no message choreography to invent.
+Their correctness requires separate algorithm, parser and memory checks.
 
 ## Guarantees and verification
 

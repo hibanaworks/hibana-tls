@@ -13,7 +13,8 @@ mod tests;
 #[path = "owned_level_tests.rs"]
 mod owned_level_tests;
 
-use super::super::{BoundedTls, DirectionalKeys, Failure};
+use super::super::{BoundedTls, Failure};
+use crate::handshake::imp::DirectionalKeys;
 use crate::{
     early::{EarlyStatus, RememberedLimits, ReplayClaim},
     endpoint::{self as tls, Level, Output, Provider},
