@@ -1,5 +1,5 @@
 //! AES-128 forward block transform, FIPS 197 (2023), for QUIC HP/GCM only.
-//! Fixed-work byte arithmetic with a checked x86-64 AES instruction path.
+//! Fixed-work byte arithmetic with checked x86-64 and compile-time AArch64 AES paths.
 //! Neither path uses secret-indexed lookup tables or allocation.
 //! Machine-code timing, secret erasure and independent security audit are unqualified.
 fn xtime(x: u8) -> u8 {
@@ -56,11 +56,33 @@ pub fn block(key: &[u8; 16], input: &[u8; 16]) -> [u8; 16] {
 pub(crate) type BlockTransform = fn(&[u8; 16], &[u8; 16]) -> [u8; 16];
 
 pub(crate) fn select() -> BlockTransform {
-    #[cfg(all(target_arch = "x86_64", not(miri)))]
+    #[cfg(all(
+        not(miri),
+        any(
+            target_arch = "x86_64",
+            all(
+                target_arch = "aarch64",
+                target_endian = "little",
+                target_feature = "aes",
+                target_feature = "neon"
+            )
+        )
+    ))]
     {
         native::select().unwrap_or(portable_block)
     }
-    #[cfg(not(all(target_arch = "x86_64", not(miri))))]
+    #[cfg(not(all(
+        not(miri),
+        any(
+            target_arch = "x86_64",
+            all(
+                target_arch = "aarch64",
+                target_endian = "little",
+                target_feature = "aes",
+                target_feature = "neon"
+            )
+        )
+    )))]
     {
         portable_block
     }
@@ -74,7 +96,18 @@ pub(super) fn blocks(key: &[u8; 16]) -> impl Fn(&[u8; 16]) -> [u8; 16] + '_ {
 pub(crate) type CounterTransform = fn(&[u8; 16], &[u8; 12], &mut [u8]);
 
 pub(crate) fn counter_transform() -> CounterTransform {
-    #[cfg(all(target_arch = "x86_64", not(miri)))]
+    #[cfg(all(
+        not(miri),
+        any(
+            target_arch = "x86_64",
+            all(
+                target_arch = "aarch64",
+                target_endian = "little",
+                target_feature = "aes",
+                target_feature = "neon"
+            )
+        )
+    ))]
     if let Some(counter) = native::select_counter() {
         return counter;
     }
@@ -94,8 +127,20 @@ fn portable_counter(key: &[u8; 16], nonce: &[u8; 12], body: &mut [u8]) {
     }
 }
 
-#[cfg(all(target_arch = "x86_64", not(miri)))]
+#[cfg(all(
+    not(miri),
+    any(
+        target_arch = "x86_64",
+        all(
+            target_arch = "aarch64",
+            target_endian = "little",
+            target_feature = "aes",
+            target_feature = "neon"
+        )
+    )
+))]
 #[allow(unsafe_code)]
+#[cfg_attr(target_arch = "aarch64", path = "aes128/aarch64.rs")]
 mod native;
 
 fn portable_block(key: &[u8; 16], input: &[u8; 16]) -> [u8; 16] {
@@ -139,6 +184,22 @@ fn portable_block(key: &[u8; 16], input: &[u8; 16]) -> [u8; 16] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // The macOS ARM CI gate runs this exact test and requires one passed test.
+    // Unlike tests inside native, this stays present if AES dispatch is disabled.
+    #[cfg(all(target_arch = "aarch64", target_os = "macos", not(miri)))]
+    #[test]
+    fn apple_aarch64_baseline_selects_hardware_aes() {
+        const { assert!(cfg!(all(target_feature = "aes", target_feature = "neon"))) };
+        assert!(!core::ptr::fn_addr_eq(
+            select(),
+            portable_block as BlockTransform
+        ));
+        assert!(!core::ptr::fn_addr_eq(
+            counter_transform(),
+            portable_counter as CounterTransform,
+        ));
+    }
+
     #[test]
     fn counter_operation_matches_portable_at_block_and_packet_boundaries() {
         for seed in 0..16u8 {
@@ -149,6 +210,22 @@ mod tests {
                 let mut expected = actual;
                 counter_transform()(&key, &nonce, &mut actual[..len]);
                 portable_counter(&key, &nonce, &mut expected[..len]);
+                assert_eq!(actual, expected);
+            }
+        }
+    }
+
+    #[test]
+    fn counter_unaligned_tails_and_counter_byte_carry_match_portable() {
+        let key = [0x93; 16];
+        let nonce = [0x27; 12];
+        for offset in [1, 7, 15] {
+            for len in [4095, 4096, 4097] {
+                let mut actual = [0xa5; 4128];
+                let mut expected = actual;
+                counter_transform()(&key, &nonce, &mut actual[offset..offset + len]);
+                portable_counter(&key, &nonce, &mut expected[offset..offset + len]);
+                // The entire backing array includes untouched prefix/suffix guards.
                 assert_eq!(actual, expected);
             }
         }

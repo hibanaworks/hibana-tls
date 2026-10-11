@@ -92,6 +92,21 @@ assumptions and Rust correspondence matter: they are not an automatic proof of
 this complete TLS implementation. For the runtime's precise premises, see
 [Hibana's guarantees](https://github.com/hibanaworks/hibana/blob/af69def928f498ad474a4d2add238615e175a49b/README.md#guarantees).
 
+## AES instruction paths
+
+AES-128 block encryption and GCM counter encryption use checked AES-NI on x86-64.
+On little-endian AArch64, they use AESE/AESMC only when the compiler target enables
+both `aes` and `neon`. Rust 1.95's `aarch64-apple-darwin` baseline enables these;
+generic AArch64 targets retain the table-free portable path. For a deployment
+that guarantees the extensions, `-C target-feature=+aes` selects the AArch64 path.
+Do not use that flag for hardware without the extensions: this is a build-time
+CPU contract, not runtime feature detection. Miri uses the portable path.
+
+GCM authentication (GHASH) remains portable on AArch64. Round keys are expanded
+once per counter operation into stack storage erased by `Secret`; this does not
+guarantee erasure of historical register/spill copies or constant-time machine
+code. No allocator, OS query, dependency, or persistent key cache is added.
+
 ## Build
 
 ```sh
