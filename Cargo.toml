@@ -8,7 +8,7 @@ license = "MIT OR Apache-2.0"
 description = "Work-in-progress no_std, allocation-free TLS choreography for Hibana"
 
 [dependencies]
-hibana = { git = "https://github.com/hibanaworks/hibana", rev = "0e613a612861e115a03e13dbcd2bc1a8858dcb4c", default-features = false }
+hibana = { git = "https://github.com/hibanaworks/hibana", rev = "3d9193e127be7e0bb332953197e1d5e752a73883", default-features = false }
 
 [features]
 default = []
