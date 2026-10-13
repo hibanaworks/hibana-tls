@@ -6,7 +6,7 @@ protocols and direct role execution. This is a QUIC-specific TLS implementation;
 it does not provide TCP TLS records or a TLS socket API.
 
 The library is `no_std` and does not link the `alloc` crate. Its sole production
-dependency is [Hibana 0.9.7](https://crates.io/crates/hibana/0.9.7). [PEM decoding](src/certificate/pem.rs) writes into caller-owned
+dependency is [Hibana 0.9.8](https://crates.io/crates/hibana/0.9.8). [PEM decoding](src/certificate/pem.rs) writes into caller-owned
 byte storage and returns borrowed DER. Secret key storage is erased when its owner
 is dropped. There is no filesystem or operating-system access.
 This is experimental security-sensitive software, not a claim of a complete
