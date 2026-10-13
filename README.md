@@ -6,7 +6,7 @@ protocols and direct role execution. This is a QUIC-specific TLS implementation;
 it does not provide TCP TLS records or a TLS socket API.
 
 The default build is `no_std` without an allocator. Its sole production dependency
-is [Hibana 0.9.8](https://crates.io/crates/hibana/0.9.8). The optional `alloc` feature supports caller-owned secret byte vectors and
+is [Hibana 0.9.9](https://crates.io/crates/hibana/0.9.9). The optional `alloc` feature supports caller-owned secret byte vectors and
 [PEM decoding](src/certificate/pem.rs). It adds no filesystem or operating-system access.
 This is experimental security-sensitive software, not a claim of a complete
 cryptographic security proof.

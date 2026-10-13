@@ -12,7 +12,7 @@ keywords = ["tls", "quic", "choreography", "no-std", "no-alloc"]
 categories = ["cryptography", "network-programming", "embedded"]
 
 [dependencies]
-hibana = { version = "=0.9.8", default-features = false }
+hibana = { version = "=0.9.9", default-features = false }
 
 [features]
 default = []
