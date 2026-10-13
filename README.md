@@ -6,7 +6,7 @@ protocols and direct role execution. This is a QUIC-specific TLS implementation;
 it does not provide TCP TLS records or a TLS socket API.
 
 The default build is `no_std` without an allocator. Its sole production dependency
-is Hibana. The optional `alloc` feature supports caller-owned secret byte vectors and
+is [Hibana 0.9.7](https://crates.io/crates/hibana/0.9.7). The optional `alloc` feature supports caller-owned secret byte vectors and
 [PEM decoding](src/certificate/pem.rs). It adds no filesystem or operating-system access.
 This is experimental security-sensitive software, not a claim of a complete
 cryptographic security proof.
@@ -64,8 +64,8 @@ adding a dispatch object. The material's methods calculate or validate bytes;
   [Key and handoff storage](src/handshake/imp/keys.rs) holds real key material and
   authenticated Finished receipts, which QUIC consumes before continuing.
 - QUIC composes and projects this graph with packet receive/transmit and timers.
-  Its [handshake endpoint set](https://github.com/hibanaworks/hibana-quic/blob/ci/parallel-client-retirement/src/quic/localside/mod.rs)
-  projects each role and attaches its Endpoint; its [handshake execution](https://github.com/hibanaworks/hibana-quic/blob/ci/parallel-client-retirement/src/quic/localside/run.rs)
+  Its [handshake endpoint set](https://github.com/hibanaworks/hibana-quic/blob/main/src/quic/localside/mod.rs)
+  projects each role and attaches its Endpoint; its [handshake execution](https://github.com/hibanaworks/hibana-quic/blob/main/src/quic/localside/run.rs)
   owns the actual concurrent futures. TLS does not spawn a hidden executor.
 
 Pure crypto, certificate and wire modules have no message choreography to invent.
@@ -89,7 +89,7 @@ The sibling QUIC repository also contains Lean proofs and Z3 counterexample
 checks for abstract ownership, cancellation and reclamation models. Their
 assumptions and Rust correspondence matter: they are not an automatic proof of
 this complete TLS implementation. For the runtime's precise premises, see
-[Hibana's guarantees](https://github.com/hibanaworks/hibana/blob/af69def928f498ad474a4d2add238615e175a49b/README.md#guarantees).
+[Hibana's guarantees](https://github.com/hibanaworks/hibana/blob/main/README.md#guarantees-and-verification).
 
 ## Build
 
