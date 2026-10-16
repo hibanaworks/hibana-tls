@@ -24,12 +24,12 @@ fn round(state: &mut [u32; 16], indices: [usize; 4]) {
 pub fn block(key: &[u8; 32], counter: u32, nonce: &[u8; 12]) -> [u8; 64] {
     let mut state = [0u32; 16];
     state[..4].copy_from_slice(&[0x61707865, 0x3320646e, 0x79622d32, 0x6b206574]);
-    for (word, bytes) in state[4..12].iter_mut().zip(key.chunks_exact(4)) {
-        *word = u32::from_le_bytes(bytes.try_into().expect("four-byte key word"));
+    for (word, bytes) in state[4..12].iter_mut().zip(key.as_chunks::<4>().0) {
+        *word = u32::from_le_bytes(*bytes);
     }
     state[12] = counter;
-    for (word, bytes) in state[13..].iter_mut().zip(nonce.chunks_exact(4)) {
-        *word = u32::from_le_bytes(bytes.try_into().expect("four-byte nonce word"));
+    for (word, bytes) in state[13..].iter_mut().zip(nonce.as_chunks::<4>().0) {
+        *word = u32::from_le_bytes(*bytes);
     }
     let original = state;
     for _ in 0..10 {
@@ -47,7 +47,7 @@ pub fn block(key: &[u8; 32], counter: u32, nonce: &[u8; 12]) -> [u8; 64] {
         }
     }
     let mut out = [0; 64];
-    for (i, bytes) in out.chunks_exact_mut(4).enumerate() {
+    for (i, bytes) in out.as_chunks_mut::<4>().0.iter_mut().enumerate() {
         bytes.copy_from_slice(&state[i].wrapping_add(original[i]).to_le_bytes());
     }
     out

@@ -47,13 +47,11 @@ unsafe fn hash(h: u128, aad: &[u8], body: &[u8], encoded: u128) -> u128 {
     let b = _mm_set_epi64x((h >> 64) as i64, h as i64);
     let mut y = 0;
     for bytes in [aad, body] {
-        let mut chunks = bytes.chunks_exact(16);
-        for chunk in &mut chunks {
-            let block: &[u8; 16] = chunk.try_into().expect("complete GHASH block");
+        let (blocks, tail) = bytes.as_chunks::<16>();
+        for block in blocks {
             // SAFETY: this function has the same PCLMULQDQ requirement.
             y = unsafe { reflected_product(y ^ u128::from_be_bytes(*block).reverse_bits(), b) };
         }
-        let tail = chunks.remainder();
         if !tail.is_empty() {
             let mut block = [0; 16];
             block[..tail.len()].copy_from_slice(tail);

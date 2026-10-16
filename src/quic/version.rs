@@ -78,8 +78,10 @@ impl<'a> Information<'a> {
     }
     pub fn available(self) -> impl Iterator<Item = u32> + 'a {
         self.available
-            .chunks_exact(4)
-            .map(|v| u32::from_be_bytes([v[0], v[1], v[2], v[3]]))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|v| u32::from_be_bytes(*v))
     }
     pub fn verify_fixed(self, wire: Version) -> Result<(), Error> {
         if self.chosen != wire.wire() {

@@ -94,7 +94,7 @@ fn independent_python_modular_corpus() {
     let bytes = include_bytes!("../../../tests/vectors/p256-modular.bin");
     let half = bytes.len() / 2;
     for (m, records) in [(&arithmetic::P, &bytes[..half]), (&N, &bytes[half..])] {
-        for row in records.chunks_exact(192) {
+        for row in records.as_chunks::<192>().0 {
             let a = Int::from_be(row[..32].try_into().unwrap());
             let b = Int::from_be(row[32..64].try_into().unwrap());
             let x = m.encode(a);
@@ -115,7 +115,7 @@ fn independent_python_modular_corpus() {
 fn independent_openssl_ecdh_ecdsa_corpus() {
     let bytes = include_bytes!("../../../tests/vectors/p256-openssl.bin");
     assert_eq!(bytes.len(), 128 * 354);
-    for row in bytes.chunks_exact(354) {
+    for row in bytes.as_chunks::<354>().0 {
         let key = SecretKey::from_slice(&row[..32]).unwrap();
         assert_eq!(key.public_key(), row[32..97]);
         let peer = &row[97..162];

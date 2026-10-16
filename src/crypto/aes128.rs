@@ -162,8 +162,8 @@ fn portable_block(key: &[u8; 16], input: &[u8; 16]) -> [u8; 16] {
             }
         }
         if round != 10 {
-            for column in state.chunks_exact_mut(4) {
-                let [a, b, c, d] = <[u8; 4]>::try_from(&*column).expect("column width");
+            for column in state.as_chunks_mut::<4>().0 {
+                let [a, b, c, d] = *column;
                 let sum = a ^ b ^ c ^ d;
                 column.copy_from_slice(&[
                     a ^ sum ^ xtime(a ^ b),

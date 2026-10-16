@@ -4,7 +4,7 @@ fn independent_hashlib_boundary_corpus() {
     let corpus = include_bytes!("vectors/sha256-hashlib.bin");
     assert_eq!(corpus.len(), 810 * 37);
     let mut bytes = [0u8; 4097];
-    for row in corpus.chunks_exact(37) {
+    for row in corpus.as_chunks::<37>().0 {
         let n = u32::from_be_bytes(row[..4].try_into().unwrap()) as usize;
         let seed = usize::from(row[4]);
         for (i, byte) in bytes[..n].iter_mut().enumerate() {

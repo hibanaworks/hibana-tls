@@ -242,7 +242,9 @@ fn contains16(bytes: &[u8], value: u16) -> Result<bool, Error> {
         return Err(Error::Capacity);
     }
     Ok(bytes
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .any(|b| u16::from_be_bytes([b[0], b[1]]) == value))
 }
 fn vector16_contains(data: &[u8], value: u16) -> Result<bool, Error> {
@@ -327,8 +329,13 @@ fn check_share_groups(groups: &[u8], shares: &[u8]) -> Result<(), Error> {
     let groups = r.vector16()?;
     r.finished()?;
     contains16(groups, GROUP_P256)?;
-    for (index, group) in groups.chunks_exact(2).enumerate() {
-        if groups[..index * 2].chunks_exact(2).any(|old| old == group) {
+    for (index, group) in groups.as_chunks::<2>().0.iter().enumerate() {
+        if groups[..index * 2]
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .any(|old| old == group)
+        {
             return Err(Error::Malformed);
         }
     }
@@ -341,7 +348,9 @@ fn check_share_groups(groups: &[u8], shares: &[u8]) -> Result<(), Error> {
         let group = r.u16()?;
         r.vector16()?;
         let index = groups
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .position(|bytes| u16::from_be_bytes([bytes[0], bytes[1]]) == group)
             .ok_or(Error::Malformed)?;
         if previous.is_some_and(|prior| index <= prior) {
@@ -1910,7 +1919,7 @@ mod tests {
         fn nibble(v: u8) -> u8 {
             if v <= b'9' { v - b'0' } else { v - b'a' + 10 }
         }
-        for (b, pair) in msg.iter_mut().zip(hex.chunks_exact(2)) {
+        for (b, pair) in msg.iter_mut().zip(hex.as_chunks::<2>().0) {
             *b = nibble(pair[0]) * 16 + nibble(pair[1]);
         }
         let hello = parse_hello_retry_request(&msg).unwrap();
@@ -2599,7 +2608,7 @@ mod tests {
         fn nibble(v: u8) -> u8 {
             if v <= b'9' { v - b'0' } else { v - b'a' + 10 }
         }
-        for (b, pair) in first.iter_mut().zip(hex.chunks_exact(2)) {
+        for (b, pair) in first.iter_mut().zip(hex.as_chunks::<2>().0) {
             *b = nibble(pair[0]) * 16 + nibble(pair[1]);
         }
         let hello = parse_client_hello_early_for_protocol(&first, crate::Protocol::Http09).unwrap();

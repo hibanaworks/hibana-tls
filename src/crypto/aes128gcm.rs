@@ -59,12 +59,10 @@ fn multiplier(h: u128) -> impl Fn(u128) -> u128 {
 }
 
 fn absorb(mut y: u128, product: &impl Fn(u128) -> u128, bytes: &[u8]) -> u128 {
-    let mut blocks = bytes.chunks_exact(16);
-    for chunk in &mut blocks {
-        let block: &[u8; 16] = chunk.try_into().expect("complete GHASH block");
+    let (blocks, tail) = bytes.as_chunks::<16>();
+    for block in blocks {
         y = product(y ^ u128::from_be_bytes(*block));
     }
-    let tail = blocks.remainder();
     if !tail.is_empty() {
         let mut block = [0u8; 16];
         block[..tail.len()].copy_from_slice(tail);
