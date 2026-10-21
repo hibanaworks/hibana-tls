@@ -6,7 +6,8 @@ protocols and direct role execution. This is a QUIC-specific TLS implementation;
 it does not provide TCP TLS records or a TLS socket API.
 
 The library is `no_std` and does not link the `alloc` crate. Its sole production
-dependency is [Hibana 0.10.0 at 2d3626cf](https://github.com/hibanaworks/hibana/commit/2d3626cfc30a767a22b828cabe1329e39ae14b53), pinned in Cargo.toml. [PEM decoding](src/certificate/pem.rs) writes into caller-owned
+dependency is [Hibana 0.10.0](https://github.com/hibanaworks/hibana), pinned in
+[Cargo.toml](Cargo.toml). [PEM decoding](src/certificate/pem.rs) writes into caller-owned
 byte storage and returns borrowed DER. Secret key storage is erased when its owner
 is dropped. There is no filesystem or operating-system access.
 This is experimental security-sensitive software, not a claim of a complete
@@ -37,12 +38,18 @@ QUIC composes the owned-key TLS global directly into its connection global,
 then projects the combined choreography for each role. The localsides execute
 that order directly through projected endpoints.
 
-A typical handoff publishes actual key material into
-[`Handoff`](src/handshake/imp/keys.rs), sends `KeysReady`, receives `KeysTaken`,
-and checks that the handoff is empty before sending `Applied`. The next
-transcript step cannot use that branch's completion signal while the previous
-key material remains unconsumed. QUIC checks the associated connection scope
-when it installs the resulting keys and Finished receipts.
+After Hello and again after Finished, VERIFY sends the `MATERIAL` endpoint to
+HANDOFF as `Keys`. HANDOFF uses that endpoint to send `Install` to VERIFY and
+wait for `Installed`, then returns the endpoint. VERIFY supplies the actual
+keys and Finished receipt to the install function before sending `Installed`.
+The install function writes the values into QUIC's key storage. Endpoint
+delegation and the request/reply order replace the separate handoff slots.
+
+The initial endpoint uses the binding returned by `KeySource::endpoint_binding`.
+Attach VERIFY before MATERIAL, and pass that same binding to every transport
+exposing the connection's key source. A new session does not restore its one-time
+issuance. QUIC checks the connection scope when it installs keys and Finished
+receipts.
 
 [imp/](src/handshake/imp/mod.rs) owns the bounded TLS material, and
 [imp/material/transcript.rs](src/handshake/imp/material/transcript.rs) performs transcript and
@@ -61,9 +68,10 @@ adding a dispatch object. The material's methods calculate or validate bytes;
   It owns reassembly input and lends one complete message through `MessageSlot`.
 - VERIFY is `client_owned` or `server_owned` in [localside/verify.rs](src/handshake/localside/verify.rs). Its exclusive
   endpoint and TLS material govern transcript checks and Finished authentication.
-- HANDOFF appears in [global/owned](src/handshake/global/owned.rs).
-  [Key and handoff storage](src/handshake/imp/keys.rs) holds real key material and
-  authenticated Finished receipts, which QUIC consumes before continuing.
+- HANDOFF receives the MATERIAL endpoint, requests installation and returns it.
+  [global/owned](src/handshake/global/owned.rs) defines the transfer and the
+  installation request/reply. [KeySource](src/handshake/imp/keys.rs) retains
+  the actual key material until VERIFY performs the installation.
 - QUIC composes and projects this graph with packet receive/transmit and timers.
   Its [handshake endpoint set](https://github.com/hibanaworks/hibana-quic/blob/main/src/quic/localside/mod.rs)
   projects each role and attaches its Endpoint; its [handshake execution](https://github.com/hibanaworks/hibana-quic/blob/main/src/quic/localside/run.rs)
@@ -118,8 +126,9 @@ To run the integration tests, place the matching `hibana-quic` repository beside
 this repository, then run `cargo test --locked`.
 
 See [supported certificate profile](X509-PROFILE.md) and
-[secret-memory boundary](MEMORY-BOUNDARY.md) before integrating. Unsafe Rust is
-limited to the explicit volatile secret-memory boundary.
+[secret-memory boundary](MEMORY-BOUNDARY.md) before integrating. Unsafe Rust
+implements secret erasure, CPU intrinsics and the connection's initial resource
+binding. The binding is created once in the caller-owned key scope.
 
 Licensed under MIT OR Apache-2.0; see LICENSE-MIT and LICENSE-APACHE.
 
