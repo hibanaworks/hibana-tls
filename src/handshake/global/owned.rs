@@ -29,6 +29,8 @@ pub const HANDOFF: u8 = 2;
 pub const OUTPUT: u8 = 3;
 /// Permission to request installation from the transcript owner, VERIFY.
 pub const MATERIAL: u8 = 36;
+/// Permission to use this connection's packet-write keys.
+pub const WRITE_KEYS: u8 = 37;
 pub type Keys<'r> = g::Msg<240, Endpoint<'r, MATERIAL>>;
 pub type Install = g::Msg<241, ()>;
 pub type Installed = g::Msg<249, ()>;

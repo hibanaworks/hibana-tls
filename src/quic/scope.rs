@@ -6,6 +6,7 @@ pub struct ApplicationKeyScope {
     connection_generation: u64,
     claimed: bool,
     material: hibana::runtime::transport::EndpointBinding,
+    write: hibana::runtime::transport::EndpointBinding,
 }
 impl ApplicationKeyScope {
     // Constructing the resource binding is this connection's integration boundary.
@@ -18,6 +19,9 @@ impl ApplicationKeyScope {
             // unique installation is consumed by KeySource. All key-source
             // transports obtain the same binding through that source.
             material: unsafe { hibana::runtime::transport::EndpointBinding::new() },
+            // SAFETY: this scope is the unique issuer for its packet-write
+            // keys, which KeySource moves out at most once.
+            write: unsafe { hibana::runtime::transport::EndpointBinding::new() },
         }
     }
     pub const fn connection_generation(&self) -> u64 {
@@ -25,6 +29,9 @@ impl ApplicationKeyScope {
     }
     pub(crate) const fn material_binding(&self) -> &hibana::runtime::transport::EndpointBinding {
         &self.material
+    }
+    pub(crate) const fn write_binding(&self) -> &hibana::runtime::transport::EndpointBinding {
+        &self.write
     }
     /// Claim before application keys exist, then share immutable identity with
     /// the actual authority producers. Dropping the claim cannot reissue it.

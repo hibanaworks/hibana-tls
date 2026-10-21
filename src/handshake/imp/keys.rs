@@ -68,12 +68,18 @@ impl<'cfg, 'buf> BoundedTls<'cfg, 'buf> {
 }
 
 impl<'scope, 'cfg, 'buf> KeySource<'scope, 'cfg, 'buf> {
-    /// Initial binding for this source's delegated material-installation role.
+    /// Initial bindings for material installation and packet-write keys.
     ///
-    /// Every session and transport exposing this source must use this same
-    /// binding. Its lifetime follows the connection's caller-owned key scope.
-    pub const fn endpoint_binding(&self) -> &'scope hibana::runtime::transport::EndpointBinding {
-        self.scope.material_binding()
+    /// Every session and transport exposing this source must use these same
+    /// bindings. Their lifetime follows the connection's caller-owned key scope.
+    pub const fn endpoint_bindings(
+        &self,
+    ) -> [(u8, &'scope hibana::runtime::transport::EndpointBinding); 2] {
+        use crate::handshake::global::owned::{MATERIAL, WRITE_KEYS};
+        [
+            (MATERIAL, self.scope.material_binding()),
+            (WRITE_KEYS, self.scope.write_binding()),
+        ]
     }
     pub const fn scope(&self) -> &'scope ApplicationKeyScope {
         self.scope
