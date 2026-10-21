@@ -420,8 +420,16 @@ pub async fn handshake_key_sources_observe<'client, 'server>(
     let mut sb = [0; 8192];
     let cs = crate::handshake::MessageSlot::new(&mut cb);
     let ss = crate::handshake::MessageSlot::new(&mut sb);
-    let cc = CarrierStorage::<1, 16, 4>::new();
-    let sc = CarrierStorage::<1, 16, 4>::new();
+    const PORTS: usize = [
+        crate::handshake::global::owned::INPUT,
+        crate::handshake::global::owned::VERIFY,
+        crate::handshake::global::owned::HANDOFF,
+        crate::handshake::global::owned::OUTPUT,
+        crate::handshake::global::owned::MATERIAL,
+    ]
+    .len();
+    let cc = CarrierStorage::<1, 16, PORTS>::new();
+    let sc = CarrierStorage::<1, 16, PORTS>::new();
     let mut cm = [0; 65536];
     let mut sm = [0; 65536];
     let cid = SessionId::new(5300);
@@ -449,6 +457,9 @@ pub async fn handshake_key_sources_observe<'client, 'server>(
             hibana::runtime::program::project::<{ crate::handshake::global::owned::MATERIAL }>(
                 &graph,
             ),
+            hibana::runtime::program::project::<{ crate::handshake::global::owned::OUTPUT }>(
+                &graph,
+            ),
         )
     };
     let sp = {
@@ -464,6 +475,9 @@ pub async fn handshake_key_sources_observe<'client, 'server>(
             hibana::runtime::program::project::<{ crate::handshake::global::owned::MATERIAL }>(
                 &graph,
             ),
+            hibana::runtime::program::project::<{ crate::handshake::global::owned::OUTPUT }>(
+                &graph,
+            ),
         )
     };
     let mut cv = cr.enter(cid, &cp.1).unwrap();
@@ -472,6 +486,8 @@ pub async fn handshake_key_sources_observe<'client, 'server>(
     let mut sw = sr.enter(sid, &sp.0).unwrap();
     let mut ch = cr.enter(cid, &cp.2).unwrap();
     let mut sh = sr.enter(sid, &sp.2).unwrap();
+    let mut cx = cr.enter(cid, &cp.4).unwrap();
+    let mut sx = sr.enter(sid, &sp.4).unwrap();
     let ckeys = cr.enter(cid, &cp.3).unwrap();
     let skeys = sr.enter(sid, &sp.3).unwrap();
     let mut cout = Collected::new();
@@ -501,13 +517,31 @@ pub async fn handshake_key_sources_observe<'client, 'server>(
         });
         let mut ct = pin!(collect(&mut ch));
         let mut st = pin!(collect(&mut sh));
+        let mut client_output = pin!(async {
+            use crate::handshake::global::owned as p;
+            let keys = cx.recv::<p::Keys<'_>>().await?;
+            cx.send::<p::Keys<'_>>(keys).await?;
+            let keys = cx.recv::<p::Keys<'_>>().await?;
+            cx.send::<p::Keys<'_>>(keys).await?;
+            Ok::<(), crate::handshake::Error>(())
+        });
+        let mut server_output = pin!(async {
+            use crate::handshake::global::owned as p;
+            let keys = sx.recv::<p::Keys<'_>>().await?;
+            sx.send::<p::Keys<'_>>(keys).await?;
+            let keys = sx.recv::<p::Keys<'_>>().await?;
+            sx.send::<p::Keys<'_>>(keys).await?;
+            Ok::<(), crate::handshake::Error>(())
+        });
         let mut tasks = pin!(TaskSet::new([
             co.as_mut(),
             so.as_mut(),
             cin.as_mut(),
             sin.as_mut(),
             ct.as_mut(),
-            st.as_mut()
+            st.as_mut(),
+            client_output.as_mut(),
+            server_output.as_mut()
         ]));
         poll_fn(|cx| {
             let result = tasks.as_mut().poll(cx);

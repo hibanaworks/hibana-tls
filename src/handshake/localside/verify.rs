@@ -180,8 +180,9 @@ impl Drop for OwnedGuard<'_, '_, '_, '_, '_, '_> {
 /// Verify a client transcript and serve requests to install its packet keys.
 ///
 /// `keys` is the initial MATERIAL endpoint. The global protocol lends it to
-/// HANDOFF for each installation request and returns it before verification
-/// continues. `install` moves the generated keys into the connection's storage.
+/// HANDOFF for each installation request. OUTPUT receives it after installation
+/// and returns it before verification continues. `install` moves the generated
+/// keys into the connection's storage.
 pub async fn client_owned<'r, 'scope, const P: usize, E>(
     endpoint: &mut Endpoint<'r, { p::VERIFY }>,
     mut keys: Endpoint<'r, { crate::handshake::global::owned::MATERIAL }>,

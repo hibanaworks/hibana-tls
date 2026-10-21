@@ -40,10 +40,13 @@ that order directly through projected endpoints.
 
 After Hello and again after Finished, VERIFY sends the `MATERIAL` endpoint to
 HANDOFF as `Keys`. HANDOFF uses that endpoint to send `Install` to VERIFY and
-wait for `Installed`, then returns the endpoint. VERIFY supplies the actual
+wait for `Installed`, then passes the endpoint to OUTPUT. OUTPUT returns it to
+VERIFY. VERIFY supplies the actual
 keys and Finished receipt to the install function before sending `Installed`.
 The install function writes the values into QUIC's key storage. Endpoint
 delegation and the request/reply order replace the separate handoff slots.
+`hello`, `installation`, `client_messages`, `server_messages`, and `complete`
+are protocol fragments for composing this order with packet transmission.
 
 The initial endpoint uses the binding returned by `KeySource::endpoint_binding`.
 Attach VERIFY before MATERIAL, and pass that same binding to every transport
@@ -68,10 +71,11 @@ adding a dispatch object. The material's methods calculate or validate bytes;
   It owns reassembly input and lends one complete message through `MessageSlot`.
 - VERIFY is `client_owned` or `server_owned` in [localside/verify.rs](src/handshake/localside/verify.rs). Its exclusive
   endpoint and TLS material govern transcript checks and Finished authentication.
-- HANDOFF receives the MATERIAL endpoint, requests installation and returns it.
+- HANDOFF receives the MATERIAL endpoint, requests installation and passes it to OUTPUT.
   [global/owned](src/handshake/global/owned.rs) defines the transfer and the
   installation request/reply. [KeySource](src/handshake/imp/keys.rs) retains
   the actual key material until VERIFY performs the installation.
+- OUTPUT receives the endpoint after installation and returns it to VERIFY.
 - QUIC composes and projects this graph with packet receive/transmit and timers.
   Its [handshake endpoint set](https://github.com/hibanaworks/hibana-quic/blob/main/src/quic/localside/mod.rs)
   projects each role and attaches its Endpoint; its [handshake execution](https://github.com/hibanaworks/hibana-quic/blob/main/src/quic/localside/run.rs)
