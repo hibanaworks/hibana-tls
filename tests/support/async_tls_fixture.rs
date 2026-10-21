@@ -168,14 +168,16 @@ fn try_handshake_observe<const MESSAGE: usize>(
     let sc = CarrierStorage::<1, 16, 4>::new();
     let mut cm = [0; 65536];
     let mut sm = [0; 65536];
-    let mut ck = SessionKitStorage::uninit();
-    let mut sk = SessionKitStorage::uninit();
-    let ck = ck.init();
-    let sk = sk.init();
     let cid = SessionId::new(5200);
     let sid = SessionId::new(5201);
-    let cr = ck.rendezvous(&mut cm, cc.bind(cid).unwrap()).unwrap();
-    let sr = sk.rendezvous(&mut sm, sc.bind(sid).unwrap()).unwrap();
+    let cc_binding = cc.bind(cid, &[]).unwrap();
+    let mut ck = SessionKitStorage::uninit();
+    let ck = ck.init();
+    let cr = ck.rendezvous(&mut cm, &cc_binding).unwrap();
+    let sc_binding = sc.bind(sid, &[]).unwrap();
+    let mut sk = SessionKitStorage::uninit();
+    let sk = sk.init();
+    let sr = sk.rendezvous(&mut sm, &sc_binding).unwrap();
     let cp = {
         let graph = global::client();
         (
@@ -257,11 +259,12 @@ pub fn probe_server_message<R>(
     let slot = crate::handshake::MessageSlot::new(&mut bytes);
     let carrier = CarrierStorage::<1, 16, 4>::new();
     let mut slab = [0; 65536];
+    let sid = SessionId::new(5202);
+    let carrier_binding = carrier.bind(sid, &[]).unwrap();
     let mut storage = SessionKitStorage::uninit();
     let kit = storage.init();
-    let sid = SessionId::new(5202);
     let rv = kit
-        .rendezvous(&mut slab, carrier.bind(sid).unwrap())
+        .rendezvous(&mut slab, &carrier_binding)
         .unwrap();
     let projection = {
         let graph = global::server();
@@ -421,17 +424,19 @@ pub fn handshake_key_sources_observe<'client, 'server>(
     let sc = CarrierStorage::<1, 16, 4>::new();
     let mut cm = [0; 65536];
     let mut sm = [0; 65536];
-    let mut ck = SessionKitStorage::uninit();
-    let mut sk = SessionKitStorage::uninit();
     let cid = SessionId::new(5300);
     let sid = SessionId::new(5301);
+    let cc_binding = cc.bind(cid, &[]).unwrap();
+    let mut ck = SessionKitStorage::uninit();
     let cr = ck
         .init()
-        .rendezvous(&mut cm, cc.bind(cid).unwrap())
+        .rendezvous(&mut cm, &cc_binding)
         .unwrap();
+    let sc_binding = sc.bind(sid, &[]).unwrap();
+    let mut sk = SessionKitStorage::uninit();
     let sr = sk
         .init()
-        .rendezvous(&mut sm, sc.bind(sid).unwrap())
+        .rendezvous(&mut sm, &sc_binding)
         .unwrap();
     let cp = {
         let graph = crate::handshake::global::owned::choreography();
