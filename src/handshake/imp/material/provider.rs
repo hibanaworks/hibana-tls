@@ -1,5 +1,33 @@
 //! Provider operations on the actual owned material.
 use super::*;
+impl BoundedTls<'_, '_> {
+    pub(in crate::handshake) fn pending_output(
+        &mut self,
+    ) -> Result<Option<(Level, core::ops::Range<usize>)>, tls::Error> {
+        if self.last_failure.is_some() {
+            return Err(tls::Error::Handshake);
+        }
+        if self.tx_initial_end > self.tx_handshake_end
+            || self.tx_handshake_end > self.tx_len
+            || self.tx_sent > self.tx_len
+            || self.tx_len > self.tx.len()
+        {
+            return Err(self.fail(Failure::State));
+        }
+        if self.tx_sent == self.tx_len {
+            return Ok(None);
+        }
+        let (level, end) = if self.tx_sent < self.tx_initial_end {
+            (Level::Initial, self.tx_initial_end)
+        } else if self.tx_sent < self.tx_handshake_end {
+            (Level::Handshake, self.tx_handshake_end)
+        } else {
+            (Level::OneRtt, self.tx_len)
+        };
+        Ok(Some((level, self.tx_sent..end)))
+    }
+}
+
 impl Provider for BoundedTls<'_, '_> {
     fn observations(&self) -> tls::Observations {
         tls::Observations {
@@ -134,28 +162,13 @@ impl Provider for BoundedTls<'_, '_> {
     }
 
     fn transmit(&mut self, out: &mut [u8]) -> Result<Option<Output>, tls::Error> {
-        if self.last_failure.is_some() {
-            return Err(tls::Error::Handshake);
-        }
-        if self.tx_sent == self.tx_len {
+        let Some((level, pending)) = self.pending_output()? else {
             return Ok(None);
-        }
+        };
         if out.is_empty() {
             return Err(tls::Error::Capacity);
         }
-        // These are byte boundaries in the actual generated flight, not a
-        // parallel handshake-phase or post-handshake completion flag.
-        if self.tx_initial_end > self.tx_handshake_end || self.tx_handshake_end > self.tx_len {
-            return Err(self.fail(Failure::State));
-        }
-        let (level, end) = if self.tx_sent < self.tx_initial_end {
-            (Level::Initial, self.tx_initial_end)
-        } else if self.tx_sent < self.tx_handshake_end {
-            (Level::Handshake, self.tx_handshake_end)
-        } else {
-            (Level::OneRtt, self.tx_len)
-        };
-        let n = out.len().min(end - self.tx_sent);
+        let n = out.len().min(pending.len());
         out[..n].copy_from_slice(&self.tx[self.tx_sent..self.tx_sent + n]);
         self.tx_sent += n;
         Ok(Some(Output { level, len: n }))

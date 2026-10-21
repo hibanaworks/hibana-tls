@@ -145,6 +145,69 @@ fn owned_level_rejects_wrong_kind_before_aead_and_discarded_initial_attachment()
 use crate::handshake::test_fixture as fixture;
 
 #[test]
+fn requested_output_level_preserves_pending_bytes_and_partial_client_hello() {
+    use crate::{
+        certificate::{CertificateDer, Limits, trust_anchor_from_der},
+        handshake::ClientConfig,
+    };
+    let root = CertificateDer::from(fixture::ROOT_DER);
+    let anchors = [trust_anchor_from_der(&root).unwrap()];
+    let mut buffers = fixture::Buffers::new();
+    let mut scope = ApplicationKeyScope::new(39);
+    let no_alloc = NoAlloc::start();
+    let mut source = BoundedTls::client(
+        ClientConfig {
+            protocol: Default::default(),
+            version: crate::quic::version::Version::V1,
+            server_name: "localhost",
+            trust_anchors: &anchors,
+            now: fixture::now(),
+            certificate_limits: Limits::default(),
+            transport_parameters: fixture::CLIENT_PARAMS,
+        },
+        buffers.storage(),
+        &mut fixture::TestRandom(101),
+    )
+    .unwrap()
+    .into_key_source(scope.claim().unwrap())
+    .unwrap();
+    let length = source.provider.tx_len;
+    assert!(length > 61);
+    assert_eq!(source.provider.tx[0], 1);
+    let mut copied = 0;
+    while copied < length {
+        for level in [Level::Handshake, Level::OneRtt] {
+            let mut untouched = [0xa5; 61];
+            assert_eq!(source.transmit(level, &mut untouched), Ok(None));
+            assert_eq!(untouched, [0xa5; 61]);
+            assert_eq!(source.provider.tx_sent, copied);
+        }
+        assert_eq!(
+            source.transmit(Level::Initial, &mut []),
+            Err(tls::Error::Capacity)
+        );
+        assert_eq!(source.provider.tx_sent, copied);
+        let mut fragment = [0; 61];
+        let output = source
+            .transmit(Level::Initial, &mut fragment)
+            .unwrap()
+            .unwrap();
+        assert_eq!(output.level, Level::Initial);
+        assert_eq!(output.len, 61.min(length - copied));
+        assert_eq!(
+            &fragment[..output.len],
+            &source.provider.tx[copied..copied + output.len]
+        );
+        copied += output.len;
+    }
+    for level in [Level::Initial, Level::Handshake, Level::OneRtt] {
+        assert_eq!(source.transmit(level, &mut []), Ok(None));
+    }
+    assert!(source.last_failure().is_none());
+    no_alloc.finish();
+}
+
+#[test]
 fn failed_source_polls_are_fatal_and_ordinary_absence_is_temporary() {
     use crate::{
         certificate::{CertificateDer, Limits, trust_anchor_from_der},
@@ -219,6 +282,9 @@ fn failed_source_polls_are_fatal_and_ordinary_absence_is_temporary() {
         source.take_integrity_budget(),
         Err(tls::Error::Handshake)
     ));
-    assert_eq!(source.transmit(&mut [0; 64]), Err(tls::Error::Handshake));
+    assert_eq!(
+        source.transmit(Level::Initial, &mut [0; 64]),
+        Err(tls::Error::Handshake)
+    );
     no_alloc.finish();
 }

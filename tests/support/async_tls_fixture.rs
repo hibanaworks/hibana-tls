@@ -371,7 +371,7 @@ pub async fn handshake_key_sources_observe<'client, 'server>(
                         let next = self
                             .remote
                             .borrow_mut()
-                            .transmit(&mut self.bytes)
+                            .transmit(level, &mut self.bytes)
                             .map_err(crate::handshake::Error::Input)?;
                         if let Some(output) = next {
                             break output;

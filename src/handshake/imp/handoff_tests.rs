@@ -358,12 +358,29 @@ async fn delegated_installation_moves_real_keys_and_finished_through_full_tls() 
             let mut server = server
                 .into_key_source(server_scope.claim().unwrap())
                 .unwrap();
+            let mut retained_handshake_checks = 0;
             let (mut client_keys, mut server_keys) = tokio::time::timeout(
                 core::time::Duration::from_secs(5),
-                async_fixture::handshake_key_sources_observe(&mut client, &mut server, |_, _| {}),
+                async_fixture::handshake_key_sources_observe(
+                    &mut client,
+                    &mut server,
+                    |_, server| {
+                        let sent = server.provider.tx_sent;
+                        if sent == server.provider.tx_initial_end
+                            && sent < server.provider.tx_handshake_end
+                        {
+                            let mut untouched = [0xa5; 37];
+                            assert_eq!(server.transmit(Level::Initial, &mut untouched), Ok(None));
+                            assert_eq!(untouched, [0xa5; 37]);
+                            assert_eq!(server.provider.tx_sent, sent);
+                            retained_handshake_checks += 1;
+                        }
+                    },
+                ),
             )
             .await
             .expect("delegated TLS installation must finish");
+            assert!(retained_handshake_checks > 0);
             let (_, mut write) = client_keys.handshake.take().unwrap().install();
             let (read, _) = server_keys.handshake.take().unwrap().install();
             let mut budget = server.take_integrity_budget().unwrap();

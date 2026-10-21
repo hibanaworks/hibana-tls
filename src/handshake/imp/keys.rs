@@ -135,7 +135,22 @@ impl<'scope, 'cfg, 'buf> KeySource<'scope, 'cfg, 'buf> {
         self.provider
             .receive_authenticated_ticket_bytes(level, bytes)
     }
-    pub fn transmit(&mut self, output: &mut [u8]) -> Result<Option<Output>, tls::Error> {
+    /// Copy the next fragment only at the requested encryption level.
+    ///
+    /// Bytes for another level remain pending. `None` reports that this level
+    /// has no next fragment; it does not report handshake completion or grant
+    /// permission to install or use packet keys.
+    pub fn transmit(
+        &mut self,
+        level: Level,
+        output: &mut [u8],
+    ) -> Result<Option<Output>, tls::Error> {
+        let Some((next, _)) = self.provider.pending_output()? else {
+            return Ok(None);
+        };
+        if next != level {
+            return Ok(None);
+        }
         self.provider.transmit(output)
     }
     pub fn early_status(&self) -> EarlyStatus {
