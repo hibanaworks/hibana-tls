@@ -21,6 +21,7 @@ hq = []
 [dev-dependencies]
 hibana-quic = { path = "../hibana-quic" }
 actor-test-allocator = { path = "../hibana-quic/tests/support/actor-test-allocator" }
+tokio = { version = "1", features = ["macros", "rt", "time"] }
 
 # Integration tests must use this working tree through QUIC's pinned Git edge.
 # Cargo ignores this test-workspace patch when TLS is consumed as a dependency.

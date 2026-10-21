@@ -68,6 +68,13 @@ impl<'cfg, 'buf> BoundedTls<'cfg, 'buf> {
 }
 
 impl<'scope, 'cfg, 'buf> KeySource<'scope, 'cfg, 'buf> {
+    /// Initial binding for this source's delegated material-installation role.
+    ///
+    /// Every session and transport exposing this source must use this same
+    /// binding. Its lifetime follows the connection's caller-owned key scope.
+    pub const fn endpoint_binding(&self) -> &'scope hibana::runtime::transport::EndpointBinding {
+        self.scope.material_binding()
+    }
     pub const fn scope(&self) -> &'scope ApplicationKeyScope {
         self.scope
     }
@@ -681,60 +688,33 @@ impl<'scope, 'cfg, 'buf> KeySource<'scope, 'cfg, 'buf> {
     }
 }
 
-/// Real material in transit between the projected VERIFY and HANDOFF locals.
-/// These slots hold values, not copied progress flags. The graph requires Taken
-/// before the producer may reuse a slot or advance its next input exchange.
-pub struct Handoff<'scope, const P: usize> {
-    handshake: core::cell::RefCell<Option<HandshakeKeyMaterial<'scope>>>,
-    application: core::cell::RefCell<Option<ApplicationKeyMaterial<'scope>>>,
-    finished: core::cell::RefCell<Option<Finished<'scope, P>>>,
-}
-impl<'scope, const P: usize> Default for Handoff<'scope, P> {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-impl<'scope, const P: usize> Handoff<'scope, P> {
-    pub const fn new() -> Self {
-        Self {
-            handshake: core::cell::RefCell::new(None),
-            application: core::cell::RefCell::new(None),
-            finished: core::cell::RefCell::new(None),
-        }
-    }
-    pub fn take_handshake(&self) -> Option<HandshakeKeyMaterial<'scope>> {
-        self.handshake.borrow_mut().take()
-    }
-    pub fn take_application(&self) -> Option<ApplicationKeyMaterial<'scope>> {
-        self.application.borrow_mut().take()
-    }
-    pub fn take_finished(&self) -> Option<Finished<'scope, P>> {
-        self.finished.borrow_mut().take()
-    }
-    pub fn is_empty(&self) -> bool {
-        self.handshake.borrow().is_none()
-            && self.application.borrow().is_none()
-            && self.finished.borrow().is_none()
-    }
-    pub(crate) fn publish(&self, source: &mut KeySource<'scope, '_, '_>) -> Result<(), tls::Error> {
-        if !self.is_empty() {
-            return Err(tls::Error::InvalidInput);
-        }
-        match source.take_handshake_keys() {
-            Ok(keys) => *self.handshake.borrow_mut() = Some(keys),
-            Err(tls::Error::KeysUnavailable) => {}
-            Err(error) => return Err(error),
-        }
-        match source.take_application_keys() {
-            Ok(keys) => *self.application.borrow_mut() = Some(keys),
-            Err(tls::Error::KeysUnavailable) => {}
-            Err(error) => return Err(error),
-        }
-        match source.take_finished_with_parameters() {
-            Ok(finished) => *self.finished.borrow_mut() = Some(finished),
-            Err(tls::Error::KeysUnavailable) => {}
-            Err(error) => return Err(error),
-        }
-        Ok(())
+impl<'scope> KeySource<'scope, '_, '_> {
+    pub(crate) fn install_available<const P: usize, E>(
+        &mut self,
+        install: &mut impl FnMut(
+            Option<HandshakeKeyMaterial<'scope>>,
+            Option<ApplicationKeyMaterial<'scope>>,
+            Option<Finished<'scope, P>>,
+        ) -> Result<(), E>,
+    ) -> Result<(), E>
+    where
+        E: From<crate::handshake::Error>,
+    {
+        let handshake = match self.take_handshake_keys() {
+            Ok(keys) => Some(keys),
+            Err(tls::Error::KeysUnavailable) => None,
+            Err(error) => return Err(crate::handshake::Error::Input(error).into()),
+        };
+        let application = match self.take_application_keys() {
+            Ok(keys) => Some(keys),
+            Err(tls::Error::KeysUnavailable) => None,
+            Err(error) => return Err(crate::handshake::Error::Input(error).into()),
+        };
+        let finished = match self.take_finished_with_parameters() {
+            Ok(receipt) => Some(receipt),
+            Err(tls::Error::KeysUnavailable) => None,
+            Err(error) => return Err(crate::handshake::Error::Input(error).into()),
+        };
+        install(handshake, application, finished)
     }
 }

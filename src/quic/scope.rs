@@ -1,21 +1,30 @@
 //! Shared affine installation identities for QUIC and its TLS locals.
 use super::packet_protection::Error;
 
-/// Caller-owned identity claimed once. It has no keys or shared running state.
-#[derive(Debug)]
+/// Caller-owned connection identity and one-time installation bindings.
 pub struct ApplicationKeyScope {
     connection_generation: u64,
     claimed: bool,
+    material: hibana::runtime::transport::EndpointBinding,
 }
 impl ApplicationKeyScope {
+    // Constructing the resource binding is this connection's integration boundary.
+    #[allow(unsafe_code)]
     pub const fn new(connection_generation: u64) -> Self {
         Self {
             connection_generation,
             claimed: false,
+            // SAFETY: this scope identifies one fresh connection's keys. Its
+            // unique installation is consumed by KeySource. All key-source
+            // transports obtain the same binding through that source.
+            material: unsafe { hibana::runtime::transport::EndpointBinding::new() },
         }
     }
     pub const fn connection_generation(&self) -> u64 {
         self.connection_generation
+    }
+    pub(crate) const fn material_binding(&self) -> &hibana::runtime::transport::EndpointBinding {
+        &self.material
     }
     /// Claim before application keys exist, then share immutable identity with
     /// the actual authority producers. Dropping the claim cannot reissue it.
@@ -29,6 +38,15 @@ impl ApplicationKeyScope {
             recovery: Some(RecoveryInstallation { scope: self }),
             publication: Some(PublicationGateInstallation { scope: self }),
         })
+    }
+}
+
+impl core::fmt::Debug for ApplicationKeyScope {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("ApplicationKeyScope")
+            .field("connection_generation", &self.connection_generation)
+            .field("claimed", &self.claimed)
+            .finish_non_exhaustive()
     }
 }
 

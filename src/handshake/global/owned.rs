@@ -1,5 +1,4 @@
-//! TLS transcript order with an explicit affine-material handoff participant.
-//! This graph is for the direct QUIC/TLS composition, not a runtime controller.
+//! TLS verification and delegated permission to install its packet keys.
 pub use crate::handshake::global::Applied;
 pub use crate::handshake::global::Certificate;
 pub use crate::handshake::global::CertificateVerify;
@@ -22,31 +21,31 @@ pub use crate::handshake::global::Retry;
 pub use crate::handshake::global::RetryHello;
 pub use crate::handshake::global::ServerStart;
 pub use crate::handshake::global::VERIFY;
-use hibana::g;
 use hibana::runtime::program::Projectable;
-// The existing QUIC composition uses roles 0..32. This is its independent
-// material consumer; no existing endpoint is aliased or driven twice.
+use hibana::{Endpoint, g};
 pub const HANDOFF: u8 = 33;
-pub type KeysReady = g::Msg<240, ()>;
-pub type KeysTaken = g::Msg<241, ()>;
-pub type RetryKeys = g::Msg<242, ()>;
-pub type HelloKeys = g::Msg<243, ()>;
-pub type ResumedKeys = g::Msg<244, ()>;
-pub type FullKeys = g::Msg<245, ()>;
-pub type CompleteKeys = g::Msg<246, ()>;
-pub type ClientKeys = g::Msg<247, ()>;
-pub type ServerKeys = g::Msg<248, ()>;
+/// Permission to request installation from the transcript owner, VERIFY.
+pub const MATERIAL: u8 = 36;
+pub type Keys<'r> = g::Msg<240, Endpoint<'r, MATERIAL>>;
+pub type Install = g::Msg<241, ()>;
+pub type Installed = g::Msg<249, ()>;
 fn receive<N: g::Message<Payload = ()>, D: g::Message<Payload = ()>>() -> impl Projectable {
     g::seq(
         g::send::<VERIFY, INPUT, N>(),
         g::seq(
             g::send::<INPUT, VERIFY, D>(),
+            g::send::<VERIFY, INPUT, Applied>(),
+        ),
+    )
+}
+fn install() -> impl Projectable {
+    g::seq(
+        g::send::<VERIFY, HANDOFF, Keys<'_>>(),
+        g::seq(
+            g::send::<MATERIAL, VERIFY, Install>(),
             g::seq(
-                g::seq(
-                    g::send::<VERIFY, HANDOFF, KeysReady>(),
-                    g::send::<HANDOFF, VERIFY, KeysTaken>(),
-                ),
-                g::send::<VERIFY, INPUT, Applied>(),
+                g::send::<VERIFY, MATERIAL, Installed>(),
+                g::send::<HANDOFF, VERIFY, Keys<'_>>(),
             ),
         ),
     )
@@ -57,24 +56,24 @@ fn hello() -> impl Projectable {
         g::route(
             g::seq(
                 g::send::<VERIFY, INPUT, Retry>(),
-                g::seq(
-                    g::send::<VERIFY, HANDOFF, RetryKeys>(),
-                    receive::<NeedRetryHello, RetryHello>(),
-                ),
+                receive::<NeedRetryHello, RetryHello>(),
             ),
-            g::seq(
-                g::send::<VERIFY, INPUT, HelloReady>(),
-                g::send::<VERIFY, HANDOFF, HelloKeys>(),
-            ),
+            g::send::<VERIFY, INPUT, HelloReady>(),
         ),
     )
 }
 fn finish() -> impl Projectable {
     g::seq(
-        receive::<NeedFinished, Finished>(),
+        g::send::<VERIFY, INPUT, NeedFinished>(),
         g::seq(
-            g::send::<VERIFY, INPUT, Complete>(),
-            g::send::<VERIFY, HANDOFF, CompleteKeys>(),
+            g::send::<INPUT, VERIFY, Finished>(),
+            g::seq(
+                install(),
+                g::seq(
+                    g::send::<VERIFY, INPUT, Applied>(),
+                    g::send::<VERIFY, INPUT, Complete>(),
+                ),
+            ),
         ),
     )
 }
@@ -82,41 +81,32 @@ pub fn client() -> impl Projectable {
     g::seq(
         hello(),
         g::seq(
-            receive::<NeedExtensions, Extensions>(),
+            install(),
             g::seq(
-                g::route(
-                    g::seq(
+                receive::<NeedExtensions, Extensions>(),
+                g::seq(
+                    g::route(
                         g::send::<VERIFY, INPUT, Resumed>(),
-                        g::send::<VERIFY, HANDOFF, ResumedKeys>(),
-                    ),
-                    g::seq(
-                        g::send::<VERIFY, INPUT, Full>(),
                         g::seq(
-                            g::send::<VERIFY, HANDOFF, FullKeys>(),
+                            g::send::<VERIFY, INPUT, Full>(),
                             g::seq(
                                 receive::<NeedCertificate, Certificate>(),
                                 receive::<NeedCertificateVerify, CertificateVerify>(),
                             ),
                         ),
                     ),
+                    finish(),
                 ),
-                finish(),
             ),
         ),
     )
 }
 pub fn server() -> impl Projectable {
-    g::seq(hello(), finish())
+    g::seq(hello(), g::seq(install(), finish()))
 }
 pub fn choreography() -> impl Projectable {
     g::route(
-        g::seq(
-            g::send::<VERIFY, INPUT, ClientStart>(),
-            g::seq(g::send::<VERIFY, HANDOFF, ClientKeys>(), client()),
-        ),
-        g::seq(
-            g::send::<VERIFY, INPUT, ServerStart>(),
-            g::seq(g::send::<VERIFY, HANDOFF, ServerKeys>(), server()),
-        ),
+        g::seq(g::send::<VERIFY, INPUT, ClientStart>(), client()),
+        g::seq(g::send::<VERIFY, INPUT, ServerStart>(), server()),
     )
 }

@@ -312,3 +312,136 @@ fn early_retirement_destroys_generation_material_and_blocks_owned_migration() {
         assert!(client.into_key_source(scope.claim().unwrap()).is_err());
     }
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn delegated_installation_moves_real_keys_and_finished_through_full_tls() {
+    for policy in [CipherPolicy::Aes128Only, CipherPolicy::ChaCha20Only] {
+        for p256 in [false, true] {
+            let root = CertificateDer::from(fixture::ROOT_DER);
+            let anchors = [trust_anchor_from_der(&root).unwrap()];
+            let chain = [fixture::LEAF_DER];
+            let signer = fixture::signing_key();
+            let mut cb = Buffers::new();
+            let mut sb = Buffers::new();
+            let mut client_scope = ApplicationKeyScope::new(701);
+            let mut server_scope = ApplicationKeyScope::new(702);
+            let mut client = BoundedTls::client_with_policy(
+                ClientConfig {
+                    protocol: Default::default(),
+                    version: crate::quic::version::Version::V1,
+                    server_name: "localhost",
+                    trust_anchors: &anchors,
+                    now: fixture::now(),
+                    certificate_limits: Limits::default(),
+                    transport_parameters: CLIENT_PARAMS,
+                },
+                cb.storage(),
+                &mut TestRandom(121),
+                policy,
+            )
+            .unwrap()
+            .into_key_source(client_scope.claim().unwrap())
+            .unwrap();
+            let config = ServerConfig {
+                protocol: Default::default(),
+                version: crate::quic::version::Version::V1,
+                certificate_chain: &chain,
+                signing_key: &signer,
+                transport_parameters: SERVER_PARAMS,
+            };
+            let server = if p256 {
+                BoundedTls::server_p256(config, sb.storage(), &mut TestRandom(143))
+            } else {
+                BoundedTls::server_with_policy(config, sb.storage(), &mut TestRandom(143), policy)
+            }
+            .unwrap();
+            let mut server = server
+                .into_key_source(server_scope.claim().unwrap())
+                .unwrap();
+            let (mut client_keys, mut server_keys) = tokio::time::timeout(
+                core::time::Duration::from_secs(5),
+                async_fixture::handshake_key_sources_observe(&mut client, &mut server, |_, _| {}),
+            )
+            .await
+            .expect("delegated TLS installation must finish");
+            let (_, mut write) = client_keys.handshake.take().unwrap().install();
+            let (read, _) = server_keys.handshake.take().unwrap().install();
+            let mut budget = server.take_integrity_budget().unwrap();
+            let mut ciphertext = [0; 20];
+            ciphertext[..4].copy_from_slice(b"keys");
+            let length = write.seal(0, b"tls", &mut ciphertext, 4).unwrap();
+            assert_eq!(
+                read.open(0, b"tls", &mut ciphertext[..length], &mut budget)
+                    .unwrap(),
+                4
+            );
+            assert_eq!(&ciphertext[..4], b"keys");
+            assert!(client_keys.application.is_some());
+            assert!(server_keys.application.is_some());
+            let client_finished = client_keys.finished.take().unwrap();
+            let server_finished = server_keys.finished.take().unwrap();
+            assert!(
+                client_finished
+                    .receipt()
+                    .authenticates_peer_parameters(SERVER_PARAMS)
+            );
+            assert!(
+                server_finished
+                    .receipt()
+                    .authenticates_peer_parameters(CLIENT_PARAMS)
+            );
+            assert!(client.take_handshake_keys().is_err());
+            assert!(server.take_handshake_keys().is_err());
+            assert!(client.take_application_keys().is_err());
+            assert!(server.take_application_keys().is_err());
+            assert!(client.take_finished().is_err());
+            assert!(server.take_finished().is_err());
+        }
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn installation_cannot_start_before_the_material_endpoint_is_lent() {
+    use crate::handshake::global::owned as p;
+    use hibana::runtime::{SessionKitStorage, ids::SessionId, program::project};
+    use hibana_quic::runtime::carrier::CarrierStorage;
+    let scope = ApplicationKeyScope::new(703);
+    let bindings = [(p::MATERIAL, scope.material_binding())];
+    let carrier = CarrierStorage::<1, 16, 4>::new();
+    let session = SessionId::new(703);
+    let transport = carrier.bind(session, &bindings).unwrap();
+    let mut slab = [0; 65536];
+    let mut storage = SessionKitStorage::uninit();
+    let rendezvous = storage.init().rendezvous(&mut slab, &transport).unwrap();
+    let global = p::choreography();
+    let owner_program = project::<{ p::VERIFY }>(&global);
+    let material_program = project::<{ p::MATERIAL }>(&global);
+    let _owner = rendezvous.enter(session, &owner_program).unwrap();
+    let mut keys = rendezvous.enter(session, &material_program).unwrap();
+    let result = tokio::time::timeout(
+        core::time::Duration::from_secs(1),
+        keys.send::<p::Install>(&()),
+    )
+    .await
+    .expect("an early installation request must be rejected");
+    assert!(result.is_err());
+    assert_eq!(carrier.queued(), 0);
+
+    let other_session = SessionId::new(704);
+    let other_carrier = CarrierStorage::<1, 16, 4>::new();
+    let other_transport = other_carrier.bind(other_session, &bindings).unwrap();
+    let mut other_slab = [0; 65536];
+    let mut other_storage = SessionKitStorage::uninit();
+    let other_rendezvous = other_storage
+        .init()
+        .rendezvous(&mut other_slab, &other_transport)
+        .unwrap();
+    let _other_owner = other_rendezvous
+        .enter(other_session, &owner_program)
+        .unwrap();
+    assert!(
+        other_rendezvous
+            .enter(other_session, &material_program)
+            .is_err()
+    );
+}

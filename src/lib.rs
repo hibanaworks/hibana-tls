@@ -1,5 +1,7 @@
 #![no_std]
 #![deny(unsafe_code)]
+// Full transcript projections check ownership across all TLS branches.
+#![allow(long_running_const_eval)]
 //! QUIC-specific TLS endpoint and cryptographic material; security qualification is ongoing.
 //! Protocol order belongs to Hibana globals and direct locals, not a phase enum.
 pub mod crypto;

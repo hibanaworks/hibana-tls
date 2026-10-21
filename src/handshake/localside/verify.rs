@@ -177,32 +177,36 @@ impl Drop for OwnedGuard<'_, '_, '_, '_, '_, '_> {
     }
 }
 
-pub async fn client_owned<'scope, const P: usize>(
-    endpoint: &mut Endpoint<'_, { p::VERIFY }>,
+/// Verify a client transcript and serve requests to install its packet keys.
+///
+/// `keys` is the initial MATERIAL endpoint. The global protocol lends it to
+/// HANDOFF for each installation request and returns it before verification
+/// continues. `install` moves the generated keys into the connection's storage.
+pub async fn client_owned<'r, 'scope, const P: usize, E>(
+    endpoint: &mut Endpoint<'r, { p::VERIFY }>,
+    mut keys: Endpoint<'r, { crate::handshake::global::owned::MATERIAL }>,
     source: &RefCell<&mut crate::handshake::keys::KeySource<'scope, '_, '_>>,
     slot: &MessageSlot<'_>,
-    handoff: &crate::handshake::keys::Handoff<'scope, P>,
-) -> Result<(), Error> {
+    mut install: impl FnMut(
+        Option<crate::handshake::keys::HandshakeKeyMaterial<'scope>>,
+        Option<crate::handshake::keys::ApplicationKeyMaterial<'scope>>,
+        Option<crate::handshake::keys::Finished<'scope, P>>,
+    ) -> Result<(), E>,
+) -> Result<(), E>
+where
+    E: From<Error> + From<hibana::EndpointError>,
+{
     use crate::handshake::global::owned as p;
     {
         let source = source.borrow();
         if !matches!(source.provider.mode, Mode::Client(_)) || !source.provider.pristine() {
-            return Err(Error::Binding);
+            return Err(Error::Binding.into());
         }
     }
     let owner = OwnedGuard { source, slot };
-    endpoint.send::<p::ClientKeys>(&()).await?;
     endpoint.send::<p::NeedHello>(&()).await?;
     endpoint.recv::<p::Hello>().await?;
     let hello = slot.apply(|m| owner.source.borrow_mut().provider.client_hello(m, false))?;
-    handoff
-        .publish(&mut owner.source.borrow_mut())
-        .map_err(Error::Input)?;
-    endpoint.send::<p::KeysReady>(&()).await?;
-    endpoint.recv::<p::KeysTaken>().await?;
-    if !handoff.is_empty() {
-        return Err(Error::Binding);
-    }
     slot.clear();
     endpoint.send::<p::Applied>(&()).await?;
 
@@ -210,28 +214,23 @@ pub async fn client_owned<'scope, const P: usize>(
     // The numeric material contains no resumption-selection control flag.
     let resumed = if let Some(resumed) = hello {
         endpoint.send::<p::HelloReady>(&()).await?;
-        endpoint.send::<p::HelloKeys>(&()).await?;
         resumed
     } else {
         endpoint.send::<p::Retry>(&()).await?;
-        endpoint.send::<p::RetryKeys>(&()).await?;
         endpoint.send::<p::NeedRetryHello>(&()).await?;
         endpoint.recv::<p::RetryHello>().await?;
         let resumed = slot
             .apply(|m| owner.source.borrow_mut().provider.client_hello(m, true))?
             .ok_or(Error::Binding)?;
-        handoff
-            .publish(&mut owner.source.borrow_mut())
-            .map_err(Error::Input)?;
-        endpoint.send::<p::KeysReady>(&()).await?;
-        endpoint.recv::<p::KeysTaken>().await?;
-        if !handoff.is_empty() {
-            return Err(Error::Binding);
-        }
         slot.clear();
         endpoint.send::<p::Applied>(&()).await?;
         resumed
     };
+    endpoint.send::<p::Keys<'_>>(keys).await?;
+    endpoint.recv::<p::Install>().await?;
+    owner.source.borrow_mut().install_available(&mut install)?;
+    endpoint.send::<p::Installed>(&()).await?;
+    keys = endpoint.recv::<p::Keys<'_>>().await?;
     endpoint.send::<p::NeedExtensions>(&()).await?;
     endpoint.recv::<p::Extensions>().await?;
     slot.apply(|m| {
@@ -241,34 +240,16 @@ pub async fn client_owned<'scope, const P: usize>(
             .provider
             .client_extensions(m, resumed)
     })?;
-    handoff
-        .publish(&mut owner.source.borrow_mut())
-        .map_err(Error::Input)?;
-    endpoint.send::<p::KeysReady>(&()).await?;
-    endpoint.recv::<p::KeysTaken>().await?;
-    if !handoff.is_empty() {
-        return Err(Error::Binding);
-    }
     slot.clear();
     endpoint.send::<p::Applied>(&()).await?;
 
     if resumed {
         endpoint.send::<p::Resumed>(&()).await?;
-        endpoint.send::<p::ResumedKeys>(&()).await?;
     } else {
         endpoint.send::<p::Full>(&()).await?;
-        endpoint.send::<p::FullKeys>(&()).await?;
         endpoint.send::<p::NeedCertificate>(&()).await?;
         endpoint.recv::<p::Certificate>().await?;
         slot.apply(|m| owner.source.borrow_mut().provider.client_certificate(m))?;
-        handoff
-            .publish(&mut owner.source.borrow_mut())
-            .map_err(Error::Input)?;
-        endpoint.send::<p::KeysReady>(&()).await?;
-        endpoint.recv::<p::KeysTaken>().await?;
-        if !handoff.is_empty() {
-            return Err(Error::Binding);
-        }
         slot.clear();
         endpoint.send::<p::Applied>(&()).await?;
 
@@ -281,14 +262,6 @@ pub async fn client_owned<'scope, const P: usize>(
                 .provider
                 .client_certificate_verify(m)
         })?;
-        handoff
-            .publish(&mut owner.source.borrow_mut())
-            .map_err(Error::Input)?;
-        endpoint.send::<p::KeysReady>(&()).await?;
-        endpoint.recv::<p::KeysTaken>().await?;
-        if !handoff.is_empty() {
-            return Err(Error::Binding);
-        }
         slot.clear();
         endpoint.send::<p::Applied>(&()).await?;
     }
@@ -300,51 +273,51 @@ pub async fn client_owned<'scope, const P: usize>(
         .borrow_mut()
         .provider
         .record_verified_finished(resumed);
-    handoff
-        .publish(&mut owner.source.borrow_mut())
-        .map_err(Error::Input)?;
-    endpoint.send::<p::KeysReady>(&()).await?;
-    endpoint.recv::<p::KeysTaken>().await?;
-    if !handoff.is_empty() {
-        return Err(Error::Binding);
-    }
+    endpoint.send::<p::Keys<'_>>(keys).await?;
+    endpoint.recv::<p::Install>().await?;
+    owner.source.borrow_mut().install_available(&mut install)?;
+    endpoint.send::<p::Installed>(&()).await?;
+    keys = endpoint.recv::<p::Keys<'_>>().await?;
     slot.clear();
     endpoint.send::<p::Applied>(&()).await?;
 
     endpoint.send::<p::Complete>(&()).await?;
-    endpoint.send::<p::CompleteKeys>(&()).await?;
     // Only this successful Hibana continuation discharges cancellation.
     // The guard contains borrowed references only; no owned buffer/key is leaked.
+    drop(keys);
     core::mem::forget(owner);
     Ok(())
 }
 
-pub async fn server_owned<'scope, const P: usize>(
-    endpoint: &mut Endpoint<'_, { p::VERIFY }>,
+/// Verify a server transcript and serve the same delegated installation protocol.
+///
+/// The installer receives server application keys after the hello exchange.
+/// Authenticated Finished is installed only after the client's Finished verifies.
+pub async fn server_owned<'r, 'scope, const P: usize, E>(
+    endpoint: &mut Endpoint<'r, { p::VERIFY }>,
+    mut keys: Endpoint<'r, { crate::handshake::global::owned::MATERIAL }>,
     source: &RefCell<&mut crate::handshake::keys::KeySource<'scope, '_, '_>>,
     slot: &MessageSlot<'_>,
-    handoff: &crate::handshake::keys::Handoff<'scope, P>,
-) -> Result<(), Error> {
+    mut install: impl FnMut(
+        Option<crate::handshake::keys::HandshakeKeyMaterial<'scope>>,
+        Option<crate::handshake::keys::ApplicationKeyMaterial<'scope>>,
+        Option<crate::handshake::keys::Finished<'scope, P>>,
+    ) -> Result<(), E>,
+) -> Result<(), E>
+where
+    E: From<Error> + From<hibana::EndpointError>,
+{
     use crate::handshake::global::owned as p;
     {
         let source = source.borrow();
         if !matches!(source.provider.mode, Mode::Server(_)) || !source.provider.pristine() {
-            return Err(Error::Binding);
+            return Err(Error::Binding.into());
         }
     }
     let owner = OwnedGuard { source, slot };
-    endpoint.send::<p::ServerKeys>(&()).await?;
     endpoint.send::<p::NeedHello>(&()).await?;
     endpoint.recv::<p::Hello>().await?;
     let hello = slot.apply(|m| owner.source.borrow_mut().provider.server_hello(m, false))?;
-    handoff
-        .publish(&mut owner.source.borrow_mut())
-        .map_err(Error::Input)?;
-    endpoint.send::<p::KeysReady>(&()).await?;
-    endpoint.recv::<p::KeysTaken>().await?;
-    if !handoff.is_empty() {
-        return Err(Error::Binding);
-    }
     slot.clear();
     endpoint.send::<p::Applied>(&()).await?;
 
@@ -352,28 +325,23 @@ pub async fn server_owned<'scope, const P: usize>(
     // The numeric material contains no resumption-selection control flag.
     let resumed = if let Some(resumed) = hello {
         endpoint.send::<p::HelloReady>(&()).await?;
-        endpoint.send::<p::HelloKeys>(&()).await?;
         resumed
     } else {
         endpoint.send::<p::Retry>(&()).await?;
-        endpoint.send::<p::RetryKeys>(&()).await?;
         endpoint.send::<p::NeedRetryHello>(&()).await?;
         endpoint.recv::<p::RetryHello>().await?;
         let resumed = slot
             .apply(|m| owner.source.borrow_mut().provider.server_hello(m, true))?
             .ok_or(Error::Binding)?;
-        handoff
-            .publish(&mut owner.source.borrow_mut())
-            .map_err(Error::Input)?;
-        endpoint.send::<p::KeysReady>(&()).await?;
-        endpoint.recv::<p::KeysTaken>().await?;
-        if !handoff.is_empty() {
-            return Err(Error::Binding);
-        }
         slot.clear();
         endpoint.send::<p::Applied>(&()).await?;
         resumed
     };
+    endpoint.send::<p::Keys<'_>>(keys).await?;
+    endpoint.recv::<p::Install>().await?;
+    owner.source.borrow_mut().install_available(&mut install)?;
+    endpoint.send::<p::Installed>(&()).await?;
+    keys = endpoint.recv::<p::Keys<'_>>().await?;
     endpoint.send::<p::NeedFinished>(&()).await?;
     endpoint.recv::<p::Finished>().await?;
     slot.apply(|m| owner.source.borrow_mut().provider.server_finished(m))?;
@@ -382,21 +350,18 @@ pub async fn server_owned<'scope, const P: usize>(
         .borrow_mut()
         .provider
         .record_verified_finished(resumed);
-    handoff
-        .publish(&mut owner.source.borrow_mut())
-        .map_err(Error::Input)?;
-    endpoint.send::<p::KeysReady>(&()).await?;
-    endpoint.recv::<p::KeysTaken>().await?;
-    if !handoff.is_empty() {
-        return Err(Error::Binding);
-    }
+    endpoint.send::<p::Keys<'_>>(keys).await?;
+    endpoint.recv::<p::Install>().await?;
+    owner.source.borrow_mut().install_available(&mut install)?;
+    endpoint.send::<p::Installed>(&()).await?;
+    keys = endpoint.recv::<p::Keys<'_>>().await?;
     slot.clear();
     endpoint.send::<p::Applied>(&()).await?;
 
     endpoint.send::<p::Complete>(&()).await?;
-    endpoint.send::<p::CompleteKeys>(&()).await?;
     // Only this successful Hibana continuation discharges cancellation.
     // The guard contains borrowed references only; no owned buffer/key is leaked.
+    drop(keys);
     core::mem::forget(owner);
     Ok(())
 }
