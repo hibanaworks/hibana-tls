@@ -7,6 +7,7 @@ pub struct ApplicationKeyScope {
     claimed: bool,
     material: hibana::runtime::transport::EndpointBinding,
     write: hibana::runtime::transport::EndpointBinding,
+    production: hibana::runtime::transport::EndpointBinding,
 }
 impl ApplicationKeyScope {
     // Constructing the resource binding is this connection's integration boundary.
@@ -22,16 +23,26 @@ impl ApplicationKeyScope {
             // SAFETY: this scope is the unique issuer for its packet-write
             // keys, which KeySource moves out at most once.
             write: unsafe { hibana::runtime::transport::EndpointBinding::new() },
+            // SAFETY: the same fresh connection owns its stream production.
+            // All transports use this single issuer through KeySource.
+            production: unsafe { hibana::runtime::transport::EndpointBinding::new() },
         }
     }
     pub const fn connection_generation(&self) -> u64 {
         self.connection_generation
     }
-    pub(crate) const fn material_binding(&self) -> &hibana::runtime::transport::EndpointBinding {
-        &self.material
-    }
-    pub(crate) const fn write_binding(&self) -> &hibana::runtime::transport::EndpointBinding {
-        &self.write
+    /// Initial bindings for key installation, packet writing and stream production.
+    ///
+    /// Every session and transport for this connection must use these bindings.
+    pub const fn endpoint_bindings(
+        &self,
+    ) -> [(u8, &hibana::runtime::transport::EndpointBinding); 3] {
+        use crate::handshake::global::owned::{MATERIAL, PRODUCTION, WRITE_KEYS};
+        [
+            (MATERIAL, &self.material),
+            (WRITE_KEYS, &self.write),
+            (PRODUCTION, &self.production),
+        ]
     }
     /// Claim before application keys exist, then share immutable identity with
     /// the actual authority producers. Dropping the claim cannot reissue it.

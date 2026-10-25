@@ -423,7 +423,7 @@ async fn installation_cannot_start_before_the_material_endpoint_is_lent() {
     use hibana::runtime::{SessionKitStorage, ids::SessionId, program::project};
     use hibana_quic::runtime::carrier::CarrierStorage;
     let scope = ApplicationKeyScope::new(703);
-    let bindings = [(p::MATERIAL, scope.material_binding())];
+    let bindings = [(p::MATERIAL, scope.endpoint_bindings()[0].1)];
     let carrier = CarrierStorage::<1, 16, 4>::new();
     let session = SessionId::new(703);
     let transport = carrier.bind(session, &bindings).unwrap();

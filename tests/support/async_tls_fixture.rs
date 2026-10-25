@@ -434,11 +434,11 @@ pub async fn handshake_key_sources_observe<'client, 'server>(
     let mut sm = [0; 65536];
     let cid = SessionId::new(5300);
     let sid = SessionId::new(5301);
-    let cbindings = c.borrow().endpoint_bindings();
+    let cbindings = c.borrow().scope().endpoint_bindings();
     let cc_binding = cc.bind(cid, &cbindings).unwrap();
     let mut ck = SessionKitStorage::uninit();
     let cr = ck.init().rendezvous(&mut cm, &cc_binding).unwrap();
-    let sbindings = s.borrow().endpoint_bindings();
+    let sbindings = s.borrow().scope().endpoint_bindings();
     let sc_binding = sc.bind(sid, &sbindings).unwrap();
     let mut sk = SessionKitStorage::uninit();
     let sr = sk.init().rendezvous(&mut sm, &sc_binding).unwrap();
