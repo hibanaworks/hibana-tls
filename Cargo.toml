@@ -12,7 +12,7 @@ keywords = ["tls", "quic", "choreography", "no-std", "no-alloc"]
 categories = ["cryptography", "network-programming", "embedded"]
 
 [dependencies]
-hibana = { git = "https://github.com/hibanaworks/hibana", rev = "271e8d0825b451f4285ed32b749e9a88d5393cbd", version = "=0.10.0", default-features = false }
+hibana = { git = "https://github.com/hibanaworks/hibana", rev = "8e884981791f173b39c0bc87aa5b48956e056e90", version = "=0.10.0", default-features = false }
 
 [features]
 default = []
