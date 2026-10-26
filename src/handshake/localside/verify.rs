@@ -182,7 +182,8 @@ impl Drop for OwnedGuard<'_, '_, '_, '_, '_, '_> {
 /// `keys` is the initial MATERIAL endpoint. The global protocol lends it to
 /// HANDOFF for each installation request. OUTPUT receives it after installation
 /// and returns it before verification continues. `install` moves the generated
-/// keys into the connection's storage.
+/// keys into the connection's storage. Success returns the endpoint so an
+/// enclosing protocol can continue using the same key-installation permission.
 pub async fn client_owned<'r, 'scope, const P: usize, E>(
     endpoint: &mut Endpoint<'r, { p::VERIFY }>,
     mut keys: Endpoint<'r, { crate::handshake::global::owned::MATERIAL }>,
@@ -193,7 +194,7 @@ pub async fn client_owned<'r, 'scope, const P: usize, E>(
         Option<crate::handshake::keys::ApplicationKeyMaterial<'scope>>,
         Option<crate::handshake::keys::Finished<'scope, P>>,
     ) -> Result<(), E>,
-) -> Result<(), E>
+) -> Result<Endpoint<'r, { crate::handshake::global::owned::MATERIAL }>, E>
 where
     E: From<Error> + From<hibana::EndpointError>,
 {
@@ -285,15 +286,15 @@ where
     endpoint.send::<p::Complete>(&()).await?;
     // Only this successful Hibana continuation discharges cancellation.
     // The guard contains borrowed references only; no owned buffer/key is leaked.
-    drop(keys);
     core::mem::forget(owner);
-    Ok(())
+    Ok(keys)
 }
 
 /// Verify a server transcript and serve the same delegated installation protocol.
 ///
 /// The installer receives server application keys after the hello exchange.
 /// Authenticated Finished is installed only after the client's Finished verifies.
+/// Success returns the endpoint for the enclosing protocol's continuation.
 pub async fn server_owned<'r, 'scope, const P: usize, E>(
     endpoint: &mut Endpoint<'r, { p::VERIFY }>,
     mut keys: Endpoint<'r, { crate::handshake::global::owned::MATERIAL }>,
@@ -304,7 +305,7 @@ pub async fn server_owned<'r, 'scope, const P: usize, E>(
         Option<crate::handshake::keys::ApplicationKeyMaterial<'scope>>,
         Option<crate::handshake::keys::Finished<'scope, P>>,
     ) -> Result<(), E>,
-) -> Result<(), E>
+) -> Result<Endpoint<'r, { crate::handshake::global::owned::MATERIAL }>, E>
 where
     E: From<Error> + From<hibana::EndpointError>,
 {
@@ -362,7 +363,6 @@ where
     endpoint.send::<p::Complete>(&()).await?;
     // Only this successful Hibana continuation discharges cancellation.
     // The guard contains borrowed references only; no owned buffer/key is leaked.
-    drop(keys);
     core::mem::forget(owner);
-    Ok(())
+    Ok(keys)
 }

@@ -442,8 +442,23 @@ pub async fn handshake_key_sources_observe<'client, 'server>(
     let sc_binding = sc.bind(sid, &sbindings).unwrap();
     let mut sk = SessionKitStorage::uninit();
     let sr = sk.init().rendezvous(&mut sm, &sc_binding).unwrap();
+    use crate::handshake::global::owned;
+    type Continue = hibana::g::Msg<250, u32>;
+    type Continued = hibana::g::Msg<251, u32>;
+    let graph = hibana::g::seq(
+        owned::choreography(),
+        hibana::g::seq(
+            hibana::g::send::<{ owned::VERIFY }, { owned::HANDOFF }, owned::Keys<'_>>(),
+            hibana::g::seq(
+                hibana::g::send::<{ owned::MATERIAL }, { owned::VERIFY }, Continue>(),
+                hibana::g::seq(
+                    hibana::g::send::<{ owned::VERIFY }, { owned::MATERIAL }, Continued>(),
+                    hibana::g::send::<{ owned::HANDOFF }, { owned::VERIFY }, owned::Keys<'_>>(),
+                ),
+            ),
+        ),
+    );
     let cp = {
-        let graph = crate::handshake::global::owned::choreography();
         (
             hibana::runtime::program::project::<{ crate::handshake::global::owned::INPUT }>(&graph),
             hibana::runtime::program::project::<{ crate::handshake::global::owned::VERIFY }>(
@@ -461,7 +476,6 @@ pub async fn handshake_key_sources_observe<'client, 'server>(
         )
     };
     let sp = {
-        let graph = crate::handshake::global::owned::choreography();
         (
             hibana::runtime::program::project::<{ crate::handshake::global::owned::INPUT }>(&graph),
             hibana::runtime::program::project::<{ crate::handshake::global::owned::VERIFY }>(
@@ -493,17 +507,29 @@ pub async fn handshake_key_sources_observe<'client, 'server>(
     {
         let mut co = pin!(async {
             cv.send::<global::ClientStart>(&()).await?;
-            localside::verify::client_owned(&mut cv, ckeys, &c, &cs, |h, a, f| {
+            let keys = localside::verify::client_owned(&mut cv, ckeys, &c, &cs, |h, a, f| {
                 cout.install(h, a, f)
             })
-            .await
+            .await?;
+            cv.send::<owned::Keys<'_>>(keys).await?;
+            let value = cv.recv::<Continue>().await?;
+            assert_eq!(value, 41);
+            cv.send::<Continued>(&(value + 1)).await?;
+            drop(cv.recv::<owned::Keys<'_>>().await?);
+            Ok::<(), crate::handshake::Error>(())
         });
         let mut so = pin!(async {
             sv.send::<global::ServerStart>(&()).await?;
-            localside::verify::server_owned(&mut sv, skeys, &s, &ss, |h, a, f| {
+            let keys = localside::verify::server_owned(&mut sv, skeys, &s, &ss, |h, a, f| {
                 sout.install(h, a, f)
             })
-            .await
+            .await?;
+            sv.send::<owned::Keys<'_>>(keys).await?;
+            let value = sv.recv::<Continue>().await?;
+            assert_eq!(value, 41);
+            sv.send::<Continued>(&(value + 1)).await?;
+            drop(sv.recv::<owned::Keys<'_>>().await?);
+            Ok::<(), crate::handshake::Error>(())
         });
         let mut cin = pin!(async {
             cw.offer().await?.recv::<global::ClientStart>().await?;
@@ -513,8 +539,20 @@ pub async fn handshake_key_sources_observe<'client, 'server>(
             sw.offer().await?.recv::<global::ServerStart>().await?;
             localside::input::server_input(&mut sw, &ss, &mut si).await
         });
-        let mut ct = pin!(collect(&mut ch));
-        let mut st = pin!(collect(&mut sh));
+        let mut ct = pin!(async {
+            collect(&mut ch).await?;
+            let mut keys = ch.recv::<owned::Keys<'_>>().await?;
+            keys.send::<Continue>(&41).await?;
+            assert_eq!(keys.recv::<Continued>().await?, 42);
+            Ok::<(), crate::handshake::Error>(ch.send::<owned::Keys<'_>>(keys).await?)
+        });
+        let mut st = pin!(async {
+            collect(&mut sh).await?;
+            let mut keys = sh.recv::<owned::Keys<'_>>().await?;
+            keys.send::<Continue>(&41).await?;
+            assert_eq!(keys.recv::<Continued>().await?, 42);
+            Ok::<(), crate::handshake::Error>(sh.send::<owned::Keys<'_>>(keys).await?)
+        });
         let mut client_output = pin!(async {
             use crate::handshake::global::owned as p;
             let keys = cx.recv::<p::Keys<'_>>().await?;
