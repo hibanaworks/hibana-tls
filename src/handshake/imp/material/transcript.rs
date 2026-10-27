@@ -35,6 +35,15 @@ impl BoundedTls<'_, '_> {
             self.reject_early();
             self.transcript.apply_hello_retry_request(message)?;
             self.begin_flight()?;
+            let protocol = match &self.mode {
+                Mode::Client(config) => config.protocol,
+                Mode::Server(_) => return Err(Failure::State),
+            };
+            let first = wire::parse_client_hello_early_for_protocol(
+                &self.certificates[..self.first_hello_len],
+                protocol,
+            )?;
+            let share: &[u8; 65] = first.key_share.try_into().map_err(|_| Failure::State)?;
             let n = if self.resumption.is_some() {
                 let age = if let Some(age) = &mut self.offer_age {
                     let Some(Resumption::Client(config)) = &self.resumption else {
@@ -48,7 +57,7 @@ impl BoundedTls<'_, '_> {
                     self.tx,
                     &self.certificates[..self.first_hello_len],
                     wire::GROUP_P256,
-                    &self.share,
+                    share,
                     &hrr,
                     age,
                 )?;
@@ -69,7 +78,7 @@ impl BoundedTls<'_, '_> {
                 wire::encode_client_hello_retry(
                     self.tx,
                     &self.certificates[..self.first_hello_len],
-                    &self.share,
+                    share,
                     &hrr,
                 )?
             };
@@ -340,10 +349,14 @@ impl BoundedTls<'_, '_> {
         } else {
             wire::GROUP_P256
         };
+        let x25519_share;
+        let p256_share;
         let local_share: &[u8] = if use_x25519 {
-            &self.x25519_share
+            x25519_share = self.x25519.as_ref().ok_or(Failure::State)?.public_key();
+            &x25519_share
         } else {
-            &self.share
+            p256_share = self.ephemeral.as_ref().ok_or(Failure::State)?.public_key();
+            &p256_share
         };
         let n = wire::encode_server_hello_group_psk(
             self.tx,

@@ -49,6 +49,20 @@ impl SecretKey {
             .encode()
             .expect("nonzero scalar in prime-order group")
     }
+    pub(crate) fn matches_public_key(&self, encoded: &[u8]) -> bool {
+        if !matches!(
+            (encoded.len(), encoded.first()),
+            (65, Some(4)) | (33, Some(2 | 3))
+        ) {
+            return false;
+        }
+        let expected = self.public_key();
+        if encoded.len() == 65 {
+            encoded == expected
+        } else {
+            encoded[0] == (2 | (expected[64] & 1)) && encoded[1..] == expected[1..33]
+        }
+    }
     /// Consumes the fresh ECDH scalar after validating the complete peer point.
     pub fn agree(self, peer: &[u8]) -> Result<[u8; 32], Error> {
         Ok(Point::parse(peer)?

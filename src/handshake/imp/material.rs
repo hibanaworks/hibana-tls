@@ -103,10 +103,8 @@ pub struct BoundedTls<'cfg, 'buf> {
     pub(in crate::handshake) parameters_len: usize,
     pub(in crate::handshake) ephemeral: Option<SecretKey>,
     pub(in crate::handshake) x25519: Option<crate::key_exchange::X25519Secret>,
-    pub(in crate::handshake) x25519_share: [u8; 32],
     pub(in crate::handshake) allow_x25519: bool,
     pub(in crate::handshake) negotiated_group: Option<u16>,
-    pub(in crate::handshake) share: [u8; 65],
     pub(in crate::handshake) random: [u8; 32],
     pub(in crate::handshake) transcript: Transcript,
     pub(in crate::handshake) schedule: KeySchedule,
@@ -156,11 +154,13 @@ impl<'cfg, 'buf> BoundedTls<'cfg, 'buf> {
         let Mode::Client(config) = &this.mode else {
             return Err(Failure::State);
         };
+        let share = this.ephemeral.as_ref().ok_or(Failure::State)?.public_key();
+        let x25519_share = this.x25519.as_ref().ok_or(Failure::State)?.public_key();
         let n = wire::encode_client_hello_dual_with_policy(
             this.tx,
             &this.random,
-            &this.share,
-            &this.x25519_share,
+            &share,
+            &x25519_share,
             config.server_name,
             config.protocol.alpn(),
             config.transport_parameters,
@@ -313,11 +313,20 @@ impl<'cfg, 'buf> BoundedTls<'cfg, 'buf> {
         let Mode::Client(config) = &self.mode else {
             return Err(Failure::State);
         };
+        let first = wire::parse_client_hello_early_for_protocol(
+            &self.certificates[..self.first_hello_len],
+            config.protocol,
+        )?;
+        let share = first.key_share.try_into().map_err(|_| Failure::State)?;
+        let x25519_share = first
+            .key_share_x25519
+            .try_into()
+            .map_err(|_| Failure::State)?;
         let n = wire::encode_client_hello_dual_early_with_policy(
             self.tx,
             &self.random,
-            &self.share,
-            &self.x25519_share,
+            share,
+            x25519_share,
             config.server_name,
             config.protocol.alpn(),
             config.transport_parameters,
@@ -522,13 +531,11 @@ impl<'cfg, 'buf> BoundedTls<'cfg, 'buf> {
             }
         }
         let ephemeral = ephemeral.ok_or(Failure::Entropy)?;
-        let share = ephemeral.public_key();
         let mut random = [0; 32];
         rng.try_fill_bytes(&mut random)
             .map_err(|_| Failure::Entropy)?;
         let x25519 =
             crate::key_exchange::X25519Secret::generate(rng).map_err(|_| Failure::Entropy)?;
-        let x25519_share = x25519.public_key();
         Ok(Self {
             mode,
             last_failure: None,
@@ -550,10 +557,8 @@ impl<'cfg, 'buf> BoundedTls<'cfg, 'buf> {
             parameters_len: 0,
             ephemeral: Some(ephemeral),
             x25519: Some(x25519),
-            x25519_share,
             allow_x25519: true,
             negotiated_group: None,
-            share,
             random,
             transcript: Transcript::new(),
             schedule: KeySchedule::new(None)?,

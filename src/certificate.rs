@@ -781,15 +781,9 @@ pub fn verify_signing_key(
     key: &crate::crypto::p256::SecretKey,
 ) -> Result<(), SigningKeyError> {
     let cert = parsed::parse(leaf_der).map_err(|_| SigningKeyError::InvalidConfig)?;
-    let signed = key
-        .sign(b"hibana-quic TLS signing key consistency")
-        .map_err(|_| SigningKeyError::InvalidConfig)?;
-    signature::verify(
-        cert.public_key_algorithm,
-        cert.public_key,
-        signature::ECDSA_SHA256,
-        b"hibana-quic TLS signing key consistency",
-        signed.to_der().as_bytes(),
-    )
-    .map_err(|_| SigningKeyError::Mismatch)
+    if cert.public_key_algorithm == signature::P256 && key.matches_public_key(cert.public_key) {
+        Ok(())
+    } else {
+        Err(SigningKeyError::Mismatch)
+    }
 }

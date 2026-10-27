@@ -34,6 +34,71 @@ fn rfc6979_p256_sha256_sample() {
     verify(&key.public_key(), b"sample", sig.to_der().as_bytes()).unwrap();
     assert!(verify(&key.public_key(), b"samples", sig.to_der().as_bytes()).is_err());
 }
+
+#[test]
+fn one_valid_signature_does_not_establish_a_certificate_key_match() {
+    let key = SecretKey::from_slice(&[9; 32]).unwrap();
+    let message = b"hibana-quic TLS signing key consistency";
+    let signature = key.sign(message).unwrap();
+    let digest = Sha256::digest(message).unwrap();
+    let z = N.reduce(Int::from_be(&digest));
+    let r_inverse = N.inverse(N.encode(Int::from_be(&signature.r)));
+    let ratio = N.decode(N.mul(N.encode(z), r_inverse));
+    // Replacing R by -R preserves its x coordinate. The different scalar
+    // d' = -d - 2z/r therefore verifies this one signature as well.
+    let other_scalar = N.sub(N.sub(ZERO, Int::from_be(&[9; 32])), N.add(ratio, ratio));
+    let other_key = SecretKey::from_slice(&other_scalar.to_be()).unwrap();
+    let other_public = other_key.public_key();
+    assert_ne!(other_public, key.public_key());
+    verify(&other_public, message, signature.to_der().as_bytes()).unwrap();
+
+    let mut certificate =
+        include_bytes!("../../../tests/vectors/x509-owned/direct-valid.der").to_vec();
+    let parsed = crate::x509::parsed::parse(&certificate).unwrap();
+    assert_eq!(parsed.public_key_algorithm, crate::x509::signature::P256);
+    let public = parsed.public_key;
+    assert_eq!(public.len(), other_public.len());
+    let offset = public.as_ptr() as usize - certificate.as_ptr() as usize;
+    certificate[offset..offset + other_public.len()].copy_from_slice(&other_public);
+    assert_eq!(
+        crate::certificate::verify_signing_key(&certificate, &key),
+        Err(crate::certificate::SigningKeyError::Mismatch)
+    );
+}
+
+#[test]
+fn public_key_match_accepts_exact_sec1_encodings_and_rejects_other_points() {
+    for scalar in [1, 9, 42, 254] {
+        let key = SecretKey::from_slice(&[scalar; 32]).unwrap();
+        let public = key.public_key();
+        let mut compressed = [0u8; 33];
+        compressed[0] = 2 | (public[64] & 1);
+        compressed[1..].copy_from_slice(&public[1..33]);
+        assert!(key.matches_public_key(&public));
+        assert!(key.matches_public_key(&compressed));
+        assert_eq!(Point::parse(&compressed).unwrap().encode().unwrap(), public);
+
+        compressed[0] ^= 1;
+        assert!(!key.matches_public_key(&compressed));
+        compressed[0] ^= 1;
+        compressed[32] ^= 1;
+        assert!(!key.matches_public_key(&compressed));
+        let mut wrong = public;
+        wrong[64] ^= 1;
+        assert!(!key.matches_public_key(&wrong));
+        for prefix in [0, 1, 2, 3, 5, 6, 7, 255] {
+            wrong = public;
+            wrong[0] = prefix;
+            assert!(!key.matches_public_key(&wrong));
+        }
+        for length in 0..public.len() {
+            assert!(!key.matches_public_key(&public[..length]));
+        }
+        assert!(!key.matches_public_key(&[0; 66]));
+    }
+    let key = SecretKey::from_slice(&[9; 32]).unwrap();
+    assert!(!key.matches_public_key(&SecretKey::from_slice(&[8; 32]).unwrap().public_key()));
+}
 #[test]
 fn field_and_group_boundaries() {
     use arithmetic::{ONE, P};
