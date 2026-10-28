@@ -33,7 +33,7 @@ impl<const N: usize> Erase for [u8; N] {
 /// Deliberately not Clone, Copy or a formatter exposing secret contents.
 pub struct Secret<T: Erase>(T);
 impl<T: Erase> Secret<T> {
-    pub fn new(value: T) -> Self {
+    pub const fn new(value: T) -> Self {
         Self(value)
     }
 }
